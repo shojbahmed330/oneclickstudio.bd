@@ -1,5 +1,5 @@
 
-import { Validator } from './services/Validator';
+import { Validator } from '../services/Validator';
 import * as fs from 'fs';
 import * as path from 'path';
 

@@ -2,10 +2,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Sparkles, Loader2, Cpu, QrCode, X, Copy, Check, AlertCircle, Wrench, ShieldCheck, Zap, RefreshCw } from 'lucide-react';
 import { AppMode, ProjectConfig, WorkspaceType } from '../../types';
-import { buildFinalHtml } from '../../utils/previewBuilder';
 import { useLanguage } from '../../i18n/LanguageContext';
 import WorkspaceToggle from './WorkspaceToggle';
 import PreviewFrame from './PreviewFrame';
+import { SandpackProvider, SandpackPreview } from "@codesandbox/sandpack-react";
+import { extractDependencies } from '../../utils/dependencyScanner';
 
 interface MobilePreviewProps {
   projectFiles: Record<string, string>;
@@ -33,28 +34,6 @@ const MobilePreview: React.FC<MobilePreviewProps> = ({
   const [renderVersion, setRenderVersion] = useState(0);
   const { t } = useLanguage();
   
-  const intendedPath = workspace === 'app' ? 'app/index.html' : 'admin/index.html';
-  const entryPath = useMemo(() => {
-    const files = Object.keys(projectFiles);
-    if (workspace === 'app') {
-      return files.find(f => f === 'app/index.html') || 
-             files.find(f => f === 'src/index.html') ||
-             files.find(f => f === 'index.html') || 
-             files.find(f => f === 'app/main.html') ||
-             files.find(f => f === 'src/main.html') ||
-             files.find(f => (f.startsWith('app/') || f.startsWith('src/')) && f.endsWith('.html')) ||
-             'app/index.html';
-    } else {
-      return files.find(f => f === 'admin/index.html') || 
-             files.find(f => f === 'admin.html') || 
-             files.find(f => f === 'admin/main.html') ||
-             files.find(f => f.startsWith('admin/') && f.endsWith('.html')) ||
-             'admin/index.html';
-    }
-  }, [workspace, projectFiles]);
-
-  const finalHtml = useMemo(() => buildFinalHtml(projectFiles, entryPath, projectConfig), [projectFiles, entryPath, projectConfig]);
-  
   const fileCount = Object.keys(projectFiles).length;
   const hasFiles = fileCount > 0;
   const isInitialLoad = fileCount === 0; 
@@ -77,6 +56,32 @@ const MobilePreview: React.FC<MobilePreviewProps> = ({
     }
   }, [hasFiles, isGenerating, workspace]);
 
+  // Format files for Sandpack (ensure leading slash and inject .env)
+  const sandpackFiles = useMemo(() => {
+    const files: Record<string, string> = {};
+    for (const [path, content] of Object.entries(projectFiles)) {
+      const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+      files[normalizedPath] = content;
+    }
+
+    // Inject .env file
+    let envContent = '';
+    if (projectConfig?.supabase_url) {
+      envContent += `VITE_SUPABASE_URL=${projectConfig.supabase_url}\n`;
+    }
+    if (projectConfig?.supabase_key) {
+      envContent += `VITE_SUPABASE_ANON_KEY=${projectConfig.supabase_key}\n`;
+    }
+    if (envContent) {
+      files['/.env'] = envContent;
+    }
+
+    return files;
+  }, [projectFiles, projectConfig]);
+
+  // Extract dynamic dependencies from project files
+  const dynamicDependencies = useMemo(() => extractDependencies(projectFiles), [projectFiles]);
+
   return (
     <section className={`flex-1 flex flex-col items-center ${workspace === 'admin' ? 'lg:items-stretch lg:px-6' : 'lg:items-start lg:pl-40'} lg:justify-center relative h-full transition-all duration-1000 ${mobileTab === 'chat' ? 'hidden lg:flex' : 'flex'}`}>
       
@@ -93,13 +98,20 @@ const MobilePreview: React.FC<MobilePreviewProps> = ({
                <div className="w-full h-full bg-[#09090b] relative flex flex-col items-center justify-center overflow-hidden">
                  {hasFiles ? (
                    <div className="w-full h-full relative">
-                     <iframe 
-                       srcDoc={finalHtml} 
-                       className="w-full h-full border-none bg-[#09090b]" 
-                       title="preview" 
-                       key={`${renderVersion}-${repairSuccess}`} 
-                       sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals" 
-                     />
+                     <SandpackProvider 
+                       key={`${renderVersion}-${repairSuccess}`}
+                       template="vite-react-ts" 
+                       files={sandpackFiles}
+                       customSetup={{
+                         dependencies: dynamicDependencies,
+                       }}
+                     >
+                       <SandpackPreview 
+                         showOpenInCodeSandbox={false} 
+                         showRefreshButton={false} 
+                         style={{ width: '100%', height: '100%', border: 'none', background: '#09090b' }} 
+                       />
+                     </SandpackProvider>
                      
                      {isGenerating && !isInitialLoad && (
                        <div className="absolute top-4 right-4 z-[250] flex items-center gap-2 px-3 py-1.5 bg-black/60 backdrop-blur-md border border-pink-500/30 rounded-full animate-in fade-in slide-in-from-top-2">

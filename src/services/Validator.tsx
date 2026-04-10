@@ -2,18 +2,29 @@
 import * as ts from "typescript";
 import { createSystem, createVirtualCompilerHost } from '@typescript/vfs';
 import { DependencyNode } from "../types";
+import { LanguageService } from "./LanguageService";
 
 export class Validator {
   private resolveCache = new Map<string, string | null>();
 
   public validateOutput(filesToValidate: Record<string, string>, allFiles: Record<string, string>, dependencyGraph: DependencyNode[], prompt: string = ""): string[] {
     const errors: string[] = [];
+    
+    // Step 2: Update VFS with current project state
+    const langService = LanguageService.getInstance();
+    langService.updateVFS(allFiles);
+
     errors.push(...this.validateFileSizeAndConflicts(filesToValidate));
     // Pass both the files to validate AND the full project context
     errors.push(...this.validateImports(filesToValidate, allFiles));
     errors.push(...this.validateDefaultImportCompatibility(filesToValidate, allFiles));
-    errors.push(...this.validateTypeScriptSyntax(filesToValidate));
-    // errors.push(...this.validateTypeScriptTypes(filesToValidate, allFiles)); // Disabled due to missing node_modules causing false positives
+    
+    // Step 1: Use LanguageService for deep TS validation (Syntax + Semantic)
+    const tsFilesToValidate = Object.keys(filesToValidate).filter(f => f.endsWith('.ts') || f.endsWith('.tsx'));
+    if (tsFilesToValidate.length > 0) {
+      errors.push(...langService.validateFiles(tsFilesToValidate));
+    }
+
     errors.push(...this.detectCircularDependencies(dependencyGraph));
     errors.push(...this.validateReactKeys(filesToValidate));
     errors.push(...this.validateForbiddenPatterns(filesToValidate));

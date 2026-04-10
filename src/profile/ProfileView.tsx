@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { LogOut, Settings, Github, CheckCircle2, XCircle, ArrowRight } from 'lucide-react';
-import { User as UserType, Transaction, GithubConfig, AppMode } from '../types.ts';
+import { User as UserType, Transaction, GithubConfig, AppMode } from '../types';
 import { useLanguage } from '../i18n/LanguageContext.tsx';
 
 // Component Imports

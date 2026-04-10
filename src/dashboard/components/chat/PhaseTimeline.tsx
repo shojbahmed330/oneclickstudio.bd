@@ -12,6 +12,7 @@ const PhaseTimeline: React.FC<PhaseTimelineProps> = ({ statuses, currentPhase })
   const phases = [
     { id: BuilderPhase.PLANNING, label: 'Planning', icon: Brain },
     { id: BuilderPhase.CODING, label: 'Coding', icon: Code },
+    { id: BuilderPhase.VERIFICATION, label: 'Shadow Build', icon: CheckCircle2 },
     { id: BuilderPhase.REVIEW, label: 'Review & Validation', icon: FileText },
     { id: BuilderPhase.SECURITY, label: 'Security Audit', icon: ShieldCheck },
     { id: BuilderPhase.PERFORMANCE, label: 'Performance Audit', icon: Zap },
@@ -23,6 +24,7 @@ const PhaseTimeline: React.FC<PhaseTimelineProps> = ({ statuses, currentPhase })
   const phaseOrder = [
     BuilderPhase.PLANNING,
     BuilderPhase.CODING,
+    BuilderPhase.VERIFICATION,
     BuilderPhase.REVIEW,
     BuilderPhase.SECURITY,
     BuilderPhase.PERFORMANCE,

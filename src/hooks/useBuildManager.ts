@@ -67,7 +67,10 @@ export const useBuildManager = (
       }
 
       await github.current.pushToGithub(githubConfig, projectFilesRef.current, projectConfig);
-      setBuildSteps(prev => prev.map(s => s.name === 'Cloud Sync' ? { ...s, status: 'completed', conclusion: 'success' } : s).concat([{ name: 'Build Engine Trigger', status: 'in_progress', conclusion: null }]));
+      setBuildSteps((prev: BuildStep[]): BuildStep[] => [
+        ...prev.map((s): BuildStep => s.name === 'Cloud Sync' ? { ...s, status: 'completed', conclusion: 'success' } : s),
+        { name: 'Build Engine Trigger', status: 'in_progress', conclusion: null }
+      ]);
       
       setBuildStatus(prev => ({ ...prev, status: 'building', message: 'Build Engine Initialized. Polling status...' }));
       

@@ -5,14 +5,17 @@ import { DiffEngine } from "./DiffEngine";
 
 import { Logger } from "./Logger";
 import { LRUCache } from "../utils/LRUCache";
+import { ProjectMapGenerator } from "../utils/projectMap";
 
 export class Orchestrator {
   private ai: AIProvider;
   private diffEngine: DiffEngine;
+  private projectMapGenerator: ProjectMapGenerator;
 
   constructor(diffEngine: DiffEngine, ai?: AIProvider) {
     this.ai = ai || new GeminiService();
     this.diffEngine = diffEngine;
+    this.projectMapGenerator = new ProjectMapGenerator();
   }
 
   public async executePhaseWithCache(
@@ -103,7 +106,10 @@ export class Orchestrator {
       }
     }
 
-    const filesToInclude = contextSet.size > 0 ? Array.from(contextSet) : Object.keys(files);
+    const allFilePaths = Object.keys(files);
+    const directoryTree = this.projectMapGenerator.generateDirectoryTree(allFilePaths);
+
+    const filesToInclude = contextSet.size > 0 ? Array.from(contextSet) : allFilePaths;
     const MAX_FILES = 20;
     const selectedFiles = filesToInclude.slice(0, MAX_FILES);
 
@@ -113,15 +119,17 @@ export class Orchestrator {
       if (!content) continue;
 
       if (content.length > 5000) {
-        contextText += `\nFILE: ${path}\nSUMMARY:\n${content.slice(0, 1200)}\n... [TRUNCATED]\n`;
+        const signature = this.projectMapGenerator.generateFileSignature(path, content);
+        contextText += `\nFILE: ${path}\nSIGNATURE (Large File):\n${JSON.stringify(signature, null, 2)}\n`;
       } else {
         contextText += `\nFILE: ${path}\n${content}\n`;
       }
     }
     
-    const graphContext = JSON.stringify(dependencyGraph.map(n => ({ file: n.file, tables: n.tablesUsed, services: n.servicesUsed })), null, 2);
+    const graphContext = this.projectMapGenerator.generateDependencyMap(dependencyGraph);
     const configContext = projectConfig ? `\n\nPROJECT CONFIGURATION:\n${JSON.stringify(projectConfig, null, 2)}` : '';
-    return `PROJECT MAP:\n${Object.keys(files).join('\n')}${impactWarning}\n\nDEEP DEPENDENCY GRAPH (Summary):\n${graphContext}${configContext}\n\nRELEVANT FILES ONLY:\n${contextText}`;
+    
+    return `<project_map>\nDIRECTORY TREE:\n${directoryTree}\n\n${graphContext}\n</project_map>${impactWarning}\n\nRELEVANT FILES ONLY:\n${contextText}${configContext}`;
   }
 
   public analyzeImpact(prompt: string, dependencyGraph: DependencyNode[]): string[] {
