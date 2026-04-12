@@ -76,7 +76,7 @@ export class AIController {
     const MODELS = {
       planning: 'deepseek/deepseek-chat-v3-0324',
       coding: 'deepseek/deepseek-chat-v3-0324',
-      review: 'anthropic/claude-3.5-haiku',
+      review: 'openai/gpt-4o-mini',
       security: 'openai/gpt-4o',
       performance: 'google/gemini-2.5-flash',
       uiux: 'openai/gpt-4o-mini',

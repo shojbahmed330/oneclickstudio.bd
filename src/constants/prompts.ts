@@ -128,6 +128,10 @@ export const MANDATORY_RULES = `### 🛠 MANDATORY RULES:
     - If working on the main app, use the app/ prefix (e.g., app/src/App.tsx, app/index.html).
     - If working on the admin dashboard, use the admin/ prefix (e.g., admin/src/App.tsx).
    - **Main App Entry:** app/src/main.tsx and app/src/App.tsx are REQUIRED for the app to run.
+
+11. **IMPORT PLACEMENT (CRITICAL):**
+    - All import statements MUST be placed at the very top of the file, before any other code, variable declarations, or functions.
+    - NEVER place import statements inside functions, components, or conditional blocks. This causes fatal AST Modification Errors.
    - **main.tsx WIRING:** When generating app/src/main.tsx, you MUST use named imports for the App component (e.g., import { App } from "./App").
    - **Admin Dashboard:** src/admin/ (if requested).
    - **Root:** ONLY database.sql, migrations/, package.json, README.md.
