@@ -51,9 +51,9 @@ const DashboardView: React.FC<DashboardViewProps> = (props) => {
         config={props.projectConfig} 
         onUpdate={props.setProjectConfig} 
         onBack={() => props.setMode(AppMode.PREVIEW)} 
-        onApply={() => {
+        onApply={async () => {
           if (props.saveProjectConfig) {
-            props.saveProjectConfig(props.projectConfig);
+            await props.saveProjectConfig(props.projectConfig);
           }
           props.setMode(AppMode.PREVIEW);
         }}

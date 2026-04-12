@@ -48,12 +48,30 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isGenerating, curre
       case 'gemini-3-flash-preview': return 'Gemini 3 Flash (Cloud)';
       case 'anthropic/claude-3.7-sonnet': return 'Claude 3.7 Sonnet (OpenRouter)';
       case 'anthropic/claude-3.5-sonnet': return 'Claude 3.5 Sonnet (OpenRouter)';
+      case 'anthropic/claude-3.5-haiku': return 'Claude 3.5 Haiku (OpenRouter)';
       case 'openai/gpt-4o': return 'GPT-4o (OpenRouter)';
       case 'openai/gpt-4o-mini': return 'GPT-4o Mini (OpenRouter)';
       case 'google/gemini-2.5-pro': return 'Gemini 2.5 Pro (OpenRouter)';
-      case 'deepseek/deepseek-coder': return 'DeepSeek Coder (OpenRouter)';
+      case 'google/gemini-2.5-flash': return 'Gemini 2.5 Flash (OpenRouter)';
+      case 'deepseek/deepseek-chat': return 'DeepSeek Chat (OpenRouter)';
+      case 'deepseek/deepseek-chat-v3-0324': return 'DeepSeek V3 0324 (OpenRouter)';
       default: return modelId || 'Google Cloud (Gemini)';
     }
+  };
+
+  const getPhaseModelName = (currentPhase: string) => {
+    const phaseLower = currentPhase?.toLowerCase() || '';
+    if (phaseLower.includes('plan')) return 'DeepSeek V3 0324 (OpenRouter)';
+    if (phaseLower.includes('cod')) return 'DeepSeek V3 0324 (OpenRouter)';
+    if (phaseLower.includes('review') || phaseLower.includes('verif')) return 'Claude 3.5 Haiku (OpenRouter)';
+    if (phaseLower.includes('fix')) return 'GPT-4o Mini / GPT-4o (OpenRouter)';
+    if (phaseLower.includes('consist')) return 'GPT-4o (OpenRouter)';
+    if (phaseLower.includes('secur')) return 'GPT-4o (OpenRouter)';
+    if (phaseLower.includes('perf')) return 'Gemini 2.5 Flash (OpenRouter)';
+    if (phaseLower.includes('ui')) return 'GPT-4o Mini (OpenRouter)';
+    if (phaseLower.includes('type')) return 'GPT-4o Mini (OpenRouter)';
+    if (phaseLower.includes('build')) return 'GPT-4o Mini (OpenRouter)';
+    return 'AI Processing...';
   };
 
   return (
@@ -97,7 +115,7 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isGenerating, curre
         <div className="flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-[380px]">
            <TypingIndicator 
              status={currentAction} 
-             modelName={getModelName(messages.filter(m => m.role === 'assistant').pop()?.model || '')}
+             modelName={getPhaseModelName(phase)}
            />
         </div>
       )}

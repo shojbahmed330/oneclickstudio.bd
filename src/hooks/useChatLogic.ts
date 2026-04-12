@@ -132,7 +132,15 @@ export const useChatLogic = (
   
   const autoStepCountRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const controller = useRef(new AIController());
+  const controllerRef = useRef<AIController | null>(null);
+  
+  const getController = useCallback(() => {
+    if (!controllerRef.current) {
+      controllerRef.current = new AIController();
+    }
+    return controllerRef.current;
+  }, []);
+
   const db = DatabaseService.getInstance();
 
   const handleStop = useCallback(() => {
@@ -322,7 +330,8 @@ INSTRUCTION: Analyze the test failures above. Fix the logic in the corresponding
         }
       }
 
-      const stream = controller.current.processRequestStream(
+      const aiController = getController();
+      const stream = aiController.processRequestStream(
         promptText, 
         currentFiles, 
         messagesSnapshot, 
@@ -436,11 +445,15 @@ INSTRUCTION: Analyze the test failures above. Fix the logic in the corresponding
       });
 
       if (currentProjectId && user) {
-        await db.updateProject(user.id, currentProjectId, updatedFiles, projectConfig);
-        setMessages(current => {
-          db.supabase.from('projects').update({ messages: current }).eq('id', currentProjectId);
-          return current;
-        });
+        try {
+          await db.updateProject(user.id, currentProjectId, updatedFiles, projectConfig);
+          setMessages(current => {
+            db.supabase.from('projects').update({ messages: current }).eq('id', currentProjectId);
+            return current;
+          });
+        } catch (dbErr) {
+          console.warn("Failed to save to DB, but generation completed:", dbErr);
+        }
       }
 
       const generatedFileCount = res.files ? Object.keys(res.files).length : 0;

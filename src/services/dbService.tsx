@@ -62,6 +62,7 @@ export class DatabaseService {
   deleteProject = projectService.deleteProject.bind(projectService);
   saveProject = projectService.saveProject.bind(projectService);
   updateProject = projectService.updateProject.bind(projectService);
+  updateProjectConfig = projectService.updateProjectConfig.bind(projectService);
   renameProject = projectService.renameProject.bind(projectService);
   createProjectSnapshot = projectService.createProjectSnapshot.bind(projectService);
   getProjectHistory = projectService.getProjectHistory.bind(projectService);

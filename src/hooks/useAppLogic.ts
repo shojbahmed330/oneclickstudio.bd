@@ -163,10 +163,24 @@ export const useAppLogic = (user: UserType | null, setUser: (u: UserType | null)
       projectManager.setProjectConfig(newConfig);
       if (user && projectManager.currentProjectId) {
         try {
-          await DatabaseService.getInstance().updateProject(user.id, projectManager.currentProjectId, projectManager.projectFiles, newConfig);
+          const payloadSize = JSON.stringify(newConfig).length;
+          console.log(`Saving config, payload size: ${payloadSize} bytes`);
+          
+          if (payloadSize > 1024 * 1024) { // 1MB
+             addToast("Warning: Config size is very large. Images might be too big.", "info");
+          }
+
+          // Optimization: Only update the config, don't re-send all files
+          await DatabaseService.getInstance().updateProjectConfig(user.id, projectManager.currentProjectId, newConfig);
           addToast("Project settings updated successfully", "success");
         } catch (e: any) {
-          addToast("Failed to save settings: " + e.message, "error");
+          console.error("Project Config Save Error:", e);
+          const errorMsg = e.message || String(e);
+          if (errorMsg.includes('Failed to fetch')) {
+            addToast("Network Error: Could not reach database. Check your internet or Supabase URL.", "error");
+          } else {
+            addToast("Failed to save settings: " + errorMsg, "error");
+          }
         }
       }
     },

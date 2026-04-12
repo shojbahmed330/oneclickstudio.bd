@@ -1,5 +1,5 @@
 
-import { supabase } from './supabaseClient';
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from './supabaseClient';
 import { Project, ProjectConfig } from '../types';
 import { Logger } from "./Logger";
 
@@ -73,6 +73,67 @@ export const projectService = {
   async updateProject(userId: string, projectId: string, files: Record<string, string>, config?: ProjectConfig) {
     const { error } = await supabase.from('projects').update({ files, config, updated_at: new Date().toISOString() }).eq('id', projectId).eq('user_id', userId);
     if (error) throw error;
+  },
+
+  async updateProjectConfig(userId: string, projectId: string, config: ProjectConfig) {
+    const updateData = { config, updated_at: new Date().toISOString() };
+    let lastError: any = null;
+
+    // 1. Try Server-Side Proxy (Best for bypassing CORS/CSP in iframes)
+    try {
+      const response = await fetch('/api/project/config', {
+        method: 'POST', // Using POST to send the body to our proxy
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          userId,
+          config,
+          supabaseUrl: SUPABASE_URL,
+          supabaseKey: SUPABASE_ANON_KEY
+        })
+      });
+      
+      if (response.ok) return;
+      const errData = await response.json();
+      lastError = new Error(errData.error || errData.message || 'Server proxy failed');
+    } catch (e) {
+      lastError = e;
+      Logger.warn("Server proxy failed, trying direct methods", { e });
+    }
+
+    // 2. Retry Loop with Supabase Client (Fallback)
+    for (let i = 0; i < 2; i++) {
+      try {
+        if (!supabase) throw new Error("Supabase client not initialized");
+        const { error } = await supabase.from('projects').update(updateData).eq('id', projectId).eq('user_id', userId);
+        if (!error) return;
+        lastError = error;
+      } catch (e) {
+        lastError = e;
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    // 3. Direct Fetch Fallback (Last Resort)
+    try {
+      const url = `${SUPABASE_URL}/rest/v1/projects?id=eq.${projectId}&user_id=eq.${userId}`;
+      const res = await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify(updateData)
+      });
+      if (res.ok) return;
+      const errJson = await res.json();
+      throw new Error(errJson.message || 'Direct fetch fallback failed');
+    } catch (fallbackError) {
+      Logger.error("All save attempts failed", { lastError, fallbackError });
+      throw lastError || fallbackError;
+    }
   },
 
   async renameProject(userId: string, projectId: string, newName: string) {

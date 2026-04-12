@@ -19,7 +19,7 @@ export class Orchestrator {
   }
 
   public async executePhaseWithCache(
-    phase: 'planning' | 'coding' | 'review' | 'security' | 'performance' | 'uiux',
+    phase: 'planning' | 'coding' | 'review' | 'security' | 'performance' | 'uiux' | 'consistency',
     input: string,
     modelName: string,
     phaseCache: LRUCache<string, any>,
@@ -58,21 +58,21 @@ export class Orchestrator {
     let phases: string[] = [];
 
     if (mode === GenerationMode.SCAFFOLD) {
-      phases = ["planning", "coding", "review"];
+      phases = ["planning", "coding", "review", "consistency"];
     } else if (mode === GenerationMode.EDIT) {
       // For EDIT mode, we include planning to allow the AI to be proactive with new features
-      phases = ["planning", "coding", "review"];
+      phases = ["planning", "coding", "review", "consistency"];
     } else if (mode === GenerationMode.FIX) {
-      phases = ["review", "coding"];
+      phases = ["review", "coding", "consistency"];
     } else if (mode === GenerationMode.OPTIMIZE) {
-      phases = ["performance", "uiux"];
+      phases = ["performance", "uiux", "consistency"];
     }
 
     return [...new Set(phases)];
   }
 
   public buildPhaseInput(
-    phase: 'planning' | 'coding' | 'review' | 'security' | 'performance' | 'uiux',
+    phase: 'planning' | 'coding' | 'review' | 'security' | 'performance' | 'uiux' | 'consistency',
     prompt: string,
     files: Record<string, string>,
     dependencyGraph: DependencyNode[],

@@ -3,6 +3,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import { ArrowLeft, Box, Image as ImageIcon, Smartphone, Save, Globe, ShieldAlert, Database, Key as KeyIcon, Zap, ShieldCheck, Lock, Eye, EyeOff, FileKey, AlertTriangle, BookOpen, Terminal, Copy, Check, Wand2, Download, Cpu, TerminalSquare, HelpCircle } from 'lucide-react';
 import { ProjectConfig } from '../../types';
 import { KeystoreService } from '../../services/keystoreService';
+import { compressImage } from '../../utils/imageUtils';
 
 interface AppConfigViewProps {
   config: ProjectConfig;
@@ -18,6 +19,7 @@ const AppConfigView: React.FC<AppConfigViewProps> = ({ config, onUpdate, onBack,
   const [showPasswords, setShowPasswords] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [showTroubleshoot, setShowTroubleshoot] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (!config.key_alias && config.appName) {
@@ -29,7 +31,13 @@ const AppConfigView: React.FC<AppConfigViewProps> = ({ config, onUpdate, onBack,
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onloadend = () => onUpdate({ ...config, [type]: reader.result as string });
+    reader.onloadend = async () => {
+      let result = reader.result as string;
+      if (type === 'icon' || type === 'splash') {
+        result = await compressImage(result, type === 'icon' ? 512 : 1024, type === 'icon' ? 512 : 1024);
+      }
+      onUpdate({ ...config, [type]: result });
+    };
     reader.readAsDataURL(file);
   };
 
@@ -45,22 +53,6 @@ const AppConfigView: React.FC<AppConfigViewProps> = ({ config, onUpdate, onBack,
     }, 1500);
   };
 
-  const aiModels = [
-    { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro (Cloud)' },
-    { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash (Cloud)' },
-    { id: 'anthropic/claude-3.7-sonnet', name: 'Claude 3.7 Sonnet (OpenRouter)' },
-    { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet (OpenRouter)' },
-    { id: 'openai/gpt-4o', name: 'GPT-4o (OpenRouter)' },
-    { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini (OpenRouter)' },
-    { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro (OpenRouter)' },
-    { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash (OpenRouter)' },
-    { id: 'deepseek/deepseek-coder', name: 'DeepSeek Coder (OpenRouter)' },
-    { id: 'deepseek/deepseek-v3.2', name: 'DeepSeek V3.2 (OpenRouter)' },
-    { id: 'qwen/qwen-3.5-9b', name: 'Qwen 3.5 9B (OpenRouter)' },
-    { id: 'moonshotai/kimi-k2.5', name: 'Kimi K2.5 (OpenRouter)' },
-    { id: 'minimax/minimax-m2.5', name: 'MiniMax M2.5 (OpenRouter)' }
-  ];
-
   return (
     <div className="flex-1 overflow-y-auto p-6 md:p-12 bg-black animate-in fade-in slide-in-from-bottom-4 duration-700 pb-12">
       <div className="max-w-4xl mx-auto space-y-10">
@@ -75,75 +67,63 @@ const AppConfigView: React.FC<AppConfigViewProps> = ({ config, onUpdate, onBack,
               <p className="text-[10px] font-black uppercase text-zinc-600 tracking-[0.4em] mt-1">Native Assets & Deployment Keys</p>
             </div>
           </div>
-          <button onClick={onApply || onBack} className="px-8 py-4 bg-pink-600 rounded-3xl font-black uppercase text-[10px] tracking-widest text-white shadow-xl shadow-pink-600/20 active:scale-95 transition-all">
-            Apply Changes
+          <button 
+            disabled={isSaving}
+            onClick={async () => {
+              if (onApply) {
+                setIsSaving(true);
+                try {
+                  await onApply();
+                } finally {
+                  setIsSaving(false);
+                }
+              } else {
+                onBack();
+              }
+            }} 
+            className={`px-8 py-4 bg-pink-600 rounded-3xl font-black uppercase text-[10px] tracking-widest text-white shadow-xl shadow-pink-600/20 active:scale-95 transition-all flex items-center gap-2 ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            {isSaving ? (
+              <>
+                <Zap size={14} className="animate-spin" />
+                Saving...
+              </>
+            ) : (
+              'Apply Changes'
+            )}
           </button>
         </div>
 
-        {/* AI MODEL SELECTOR */}
+        {/* OPENROUTER KEY CONFIG */}
         <div className="glass-tech p-8 rounded-[3rem] border-pink-500/20 bg-gradient-to-br from-pink-600/5 to-transparent space-y-6">
            <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
-                <div className="p-3 bg-pink-500/10 text-pink-500 rounded-2xl"><Cpu size={24}/></div>
+                <div className="p-3 bg-pink-500/10 text-pink-500 rounded-2xl"><KeyIcon size={24}/></div>
                 <div>
-                   <h3 className="text-xl font-black uppercase tracking-tight text-white">AI Neural Engine</h3>
-                   <p className="text-[10px] font-black uppercase text-pink-500 tracking-[0.3em]">Select target intelligence core</p>
+                   <h3 className="text-xl font-black uppercase tracking-tight text-white">AI Engine Credentials</h3>
+                   <p className="text-[10px] font-black uppercase text-pink-500 tracking-[0.3em]">Configure OpenRouter Access</p>
                 </div>
               </div>
-              <button 
-                onClick={() => setShowTroubleshoot(!showTroubleshoot)}
-                className="p-3 bg-white/5 rounded-2xl text-zinc-500 hover:text-white transition-all flex items-center gap-2"
-              >
-                <KeyIcon size={18}/>
-                <span className="text-[9px] font-black uppercase tracking-widest hidden sm:inline">OpenRouter Key</span>
-              </button>
            </div>
            
-           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {aiModels.map(model => (
-                <button 
-                  key={model.id}
-                  onClick={() => onUpdate({ ...config, selected_model: model.id })}
-                  className={`p-5 rounded-2xl border text-left transition-all relative overflow-hidden group ${config.selected_model === model.id ? 'bg-pink-600 border-pink-500 text-white shadow-lg' : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
-                >
-                  <div className="text-xs font-black uppercase tracking-widest relative z-10">{model.name}</div>
-                  {model.id.includes('/') && <div className="text-[8px] mt-1 opacity-60 font-bold relative z-10">OPENROUTER API</div>}
-                  {config.selected_model === model.id && (
-                     <div className="absolute -right-2 -bottom-2 opacity-20 transform rotate-12">
-                        <Check size={48}/>
-                     </div>
-                  )}
-                </button>
-              ))}
-           </div>
-
-           {showTroubleshoot && (
-              <div className="p-8 bg-blue-500/5 border border-blue-500/20 rounded-[2.5rem] space-y-6 animate-in slide-in-from-top-4">
-                 <div className="flex items-center gap-3">
-                    <KeyIcon size={20} className="text-blue-400"/>
-                    <span className="text-xs font-black text-white uppercase tracking-widest">OpenRouter API Configuration:</span>
-                 </div>
-                 <div className="space-y-4 text-[11px] font-bold text-zinc-400 leading-loose uppercase">
-                    <div className="flex gap-4">
-                       <div className="w-6 h-6 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0">1</div>
-                       <p>Get your API key from <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">openrouter.ai/keys</a></p>
-                    </div>
-                    <div className="flex gap-4">
-                       <div className="w-6 h-6 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0">2</div>
-                       <div className="flex-1 space-y-2">
-                         <label className="text-[10px] font-black uppercase text-zinc-600 tracking-widest">API Key</label>
-                         <input 
-                           type="password" 
-                           value={config.openrouter_key || ''} 
-                           onChange={e => onUpdate({...config, openrouter_key: e.target.value.trim()})} 
-                           placeholder="sk-or-v1-..." 
-                           className="w-full bg-black/40 border border-white/10 rounded-2xl p-4 text-sm font-mono text-blue-400 focus:border-blue-500/40 outline-none transition-all"
-                         />
-                       </div>
-                    </div>
+           <div className="p-8 bg-black/40 border border-white/10 rounded-[2.5rem] space-y-6">
+              <div className="flex items-center gap-3">
+                 <KeyIcon size={20} className="text-blue-400"/>
+                 <span className="text-xs font-black text-white uppercase tracking-widest">OpenRouter API Key:</span>
+              </div>
+              <div className="space-y-4 text-[11px] font-bold text-zinc-400 leading-loose uppercase">
+                 <div className="flex flex-col gap-2">
+                   <p>Get your API key from <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">openrouter.ai/keys</a></p>
+                   <input 
+                     type="password" 
+                     value={config.openrouter_key || ''} 
+                     onChange={e => onUpdate({...config, openrouter_key: e.target.value.trim()})} 
+                     placeholder="sk-or-v1-..." 
+                     className="w-full bg-black/40 border border-white/10 rounded-2xl p-4 text-sm font-mono text-blue-400 focus:border-blue-500/40 outline-none transition-all"
+                   />
                  </div>
               </div>
-           )}
+           </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">

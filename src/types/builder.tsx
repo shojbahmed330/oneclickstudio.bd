@@ -60,7 +60,7 @@ export interface AIModel {
 
 export interface AIProvider {
   callPhase(
-    phase: 'planning' | 'coding' | 'review' | 'security' | 'performance' | 'uiux',
+    phase: 'planning' | 'coding' | 'review' | 'security' | 'performance' | 'uiux' | 'consistency',
     input: string,
     modelName?: string,
     retries?: number,

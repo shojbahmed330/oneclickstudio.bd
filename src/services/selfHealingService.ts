@@ -241,7 +241,8 @@ export class SelfHealingService {
         const definitions = await this.geminiService.generateTypeDefinitions(
           detectedMissingTypes, 
           modelName, 
-          previousGeneratedTypes
+          previousGeneratedTypes,
+          projectConfig
         );
 
         if (definitions) {

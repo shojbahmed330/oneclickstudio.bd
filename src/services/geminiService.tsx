@@ -31,10 +31,10 @@ export class GeminiService implements AIProvider {
   }
 
   async callPhase(
-    phase: 'planning' | 'coding' | 'review' | 'security' | 'performance' | 'uiux' | 'type_generation',
+    phase: 'planning' | 'coding' | 'review' | 'security' | 'performance' | 'uiux' | 'type_generation' | 'consistency',
     input: string,
     modelName: string = 'gemini-3-pro-preview',
-    retries: number = 3,
+    retries: number = 5,
     projectConfig?: any
   ): Promise<any> {
     // ... (systemInstruction setup remains same)
@@ -66,6 +66,19 @@ Example:
       case 'uiux': 
         systemInstruction = `${BASE_ROLE}\n\n${STRICT_SCOPE_EDITING}\n\n${DESIGN_SYSTEM}\n\n${SURGICAL_EDITING}\n\n${PATCH_MODE_RULE}\n\n${UI_UX_PROMPT}\n\n${RESPONSE_FORMAT}`; 
         break;
+      case 'consistency':
+        systemInstruction = `${BASE_ROLE}\n\nYou are the "Project Consistency Fixer".
+Your mission is to ensure the project is structurally sound, complete, and error-free.
+You MUST:
+1. Identify and CREATE any missing files referenced in imports but not yet existing.
+2. Fix any broken import paths or case-sensitivity mismatches.
+3. Ensure the application is correctly wrapped in a Router (e.g., <MemoryRouter> in App.tsx or main.tsx) if react-router-dom is used.
+4. Generate missing TypeScript definitions or interfaces to resolve type errors.
+5. Ensure all components follow the project's design system and architectural patterns.
+
+You MUST return a JSON object with a "files" field containing the modified or new files.
+${RESPONSE_FORMAT}`;
+        break;
     }
 
     if (modelName.includes('/')) {
@@ -79,36 +92,52 @@ Example:
     const key = import.meta.env.VITE_GEMINI_API_KEY || import.meta.env.VITE_API_KEY;
     if (!key || key === "undefined") throw new Error("GEMINI_API_KEY not found.");
 
-    const ai = new GoogleGenAI({ apiKey: key });
-    const model = modelName.includes('pro') ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview';
+    const model = modelName.includes('pro') ? 'gemini-1.5-pro' : 'gemini-1.5-flash';
 
     let lastError;
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        const response = await ai.models.generateContent({
-          model,
-          contents: [{ parts: [{ text: input }] }],
-          config: { 
-            systemInstruction: { parts: [{ text: systemInstruction }] },
-            responseMimeType: "application/json", 
-            temperature: 0.1 
-          }
+        // Using our server-side proxy to bypass CORS/CSP in iframes
+        const response = await fetch('/api/ai/gemini', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            apiKey: key,
+            contents: [{ parts: [{ text: input }] }],
+            config: { 
+              systemInstruction: { parts: [{ text: systemInstruction }] },
+              responseMimeType: "application/json", 
+              temperature: 0.1 
+            }
+          })
         });
-        
-        return parseModelJson(response.text || '{}');
-      } catch (error: any) {
-        Logger.warn(`Attempt ${attempt} failed`, { component: 'GeminiService', model, attempt }, error);
-        lastError = error;
-        if (attempt < retries) {
-          const delay = Math.pow(2, attempt) * 1000; // Exponential backoff: 2s, 4s, 8s
-          await new Promise(resolve => setTimeout(resolve, delay));
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(`Gemini Proxy error: ${response.status} - ${errorData.error?.message || JSON.stringify(errorData)}`);
         }
+
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        return parseModelJson(text || '{}');
+      } catch (error: any) {
+        Logger.warn(`Attempt ${attempt} failed with Gemini Proxy`, { component: 'GeminiService', model, attempt }, error);
+        lastError = error;
+        
+        // If it's a fetch error (Failed to fetch), retry immediately or with small delay
+        if (error.message.includes('Failed to fetch') || attempt < retries) {
+          const delay = Math.pow(2, attempt) * 1000;
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        throw error;
       }
     }
-    throw new Error(`Gemini API failed after ${retries} attempts: ${lastError?.message}`);
+    throw new Error(`Gemini Proxy failed after ${retries} attempts: ${lastError?.message}`);
   }
 
-  async generateTypeDefinitions(missingTypes: { name: string, context: string }[], modelName: string = 'gemini-3-pro-preview', previousFailures?: string): Promise<string> {
+  async generateTypeDefinitions(missingTypes: { name: string, context: string }[], modelName: string = 'gemini-3-pro-preview', previousFailures?: string, projectConfig?: any): Promise<string> {
     let prompt = `Generate TypeScript declarations for these missing names based on their usage context:\n\n` + 
       missingTypes.map(m => `Name: ${m.name}\nContext:\n\`\`\`typescript\n${m.context}\n\`\`\``).join('\n\n') +
       `\n\nUse 'any' or best guesses for types if context is insufficient.`;
@@ -117,7 +146,7 @@ Example:
       prompt += `\n\n⚠️ PREVIOUS ATTEMPT FAILED:\nThe following definitions were generated previously but did not resolve the errors:\n\`\`\`typescript\n${previousFailures}\n\`\`\`\nPlease try a DIFFERENT approach. Ensure you export the types correctly, use 'declare global' if necessary, or check for interface/type conflicts.`;
     }
 
-    const result = await this.callPhase('type_generation', prompt, modelName);
+    const result = await this.callPhase('type_generation', prompt, modelName, 3, projectConfig);
     return result.types || "";
   }
 
@@ -128,16 +157,15 @@ Example:
     let lastError;
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        // Using our server-side proxy to bypass CORS/CSP in iframes
+        const response = await fetch('/api/ai/openrouter', {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${key}`,
             'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://ai.studio/build',
-            'X-Title': 'AI Studio Build'
           },
           body: JSON.stringify({
             model,
+            apiKey: key,
             messages: [
               { role: 'system', content: system },
               { role: 'user', content: prompt }
@@ -147,23 +175,27 @@ Example:
         });
 
         if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`OpenRouter API error: ${response.status} ${response.statusText} - ${errorText}`);
+          const errorData = await response.json();
+          const errorMsg = errorData.error ? (typeof errorData.error === 'object' ? JSON.stringify(errorData.error) : errorData.error) : JSON.stringify(errorData);
+          throw new Error(`OpenRouter Proxy error: ${response.status} - ${errorMsg}`);
         }
 
         const data = await response.json();
         const content = data.choices[0].message.content;
         return parseModelJson(content || '{}');
       } catch (error: any) {
-        Logger.warn(`Attempt ${attempt} failed with OpenRouter`, { component: 'GeminiService', model, attempt }, error);
+        Logger.warn(`Attempt ${attempt} failed with OpenRouter Proxy`, { component: 'GeminiService', model, attempt }, error);
         lastError = error;
-        if (attempt < retries) {
+        
+        if (error.message.includes('Failed to fetch') || attempt < retries) {
           const delay = Math.pow(2, attempt) * 1000;
           await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
         }
+        throw error;
       }
     }
-    throw new Error(`OpenRouter API failed after ${retries} attempts: ${lastError?.message}`);
+    throw new Error(`OpenRouter Proxy failed after ${retries} attempts: ${lastError?.message}`);
   }
 
   private async callPhaseWithOllama(model: string, system: string, prompt: string): Promise<any> {
