@@ -97,16 +97,14 @@ ${RESPONSE_FORMAT}`;
     let lastError;
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        // Using our server-side proxy to bypass CORS/CSP in iframes
-        const response = await fetch('/api/ai/gemini', {
+        // Calling Gemini API directly
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model,
-            apiKey: key,
             contents: [{ parts: [{ text: input }] }],
-            config: { 
-              systemInstruction: { parts: [{ text: systemInstruction }] },
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            generationConfig: { 
               responseMimeType: "application/json", 
               temperature: 0.1 
             }
@@ -157,15 +155,17 @@ ${RESPONSE_FORMAT}`;
     let lastError;
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        // Using our server-side proxy to bypass CORS/CSP in iframes
-        const response = await fetch('/api/ai/openrouter', {
+        // Calling OpenRouter directly
+        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${key}`,
+            'HTTP-Referer': window.location.origin,
+            'X-Title': 'OneClick Studio'
           },
           body: JSON.stringify({
             model,
-            apiKey: key,
             messages: [
               { role: 'system', content: system },
               { role: 'user', content: prompt }
@@ -175,8 +175,14 @@ ${RESPONSE_FORMAT}`;
         });
 
         if (!response.ok) {
-          const errorData = await response.json();
-          const errorMsg = errorData.error ? (typeof errorData.error === 'object' ? JSON.stringify(errorData.error) : errorData.error) : JSON.stringify(errorData);
+          let errorMsg = `HTTP ${response.status}`;
+          try {
+            const errorData = await response.json();
+            errorMsg = errorData.error ? (typeof errorData.error === 'object' ? JSON.stringify(errorData.error) : errorData.error) : JSON.stringify(errorData);
+          } catch (e) {
+            // If response is not JSON (e.g. 405 Method Not Allowed HTML page)
+            errorMsg = await response.text();
+          }
           throw new Error(`OpenRouter Proxy error: ${response.status} - ${errorMsg}`);
         }
 
