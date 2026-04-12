@@ -1,116 +1,190 @@
 
-import React, { useEffect } from 'react';
-import { Loader2, RefreshCw, Smartphone, Globe } from 'lucide-react';
-import { Project } from '../types';
-import { SandpackProvider, SandpackPreview } from "@codesandbox/sandpack-react";
+import React, { useEffect, useState, useRef } from 'react';
 import { extractDependencies } from '../utils/dependencyScanner';
+import { ProjectConfig, WorkspaceType } from '../types';
 import { PreviewService } from '../services/PreviewService';
+import { WebContainerService } from '../services/WebContainerService';
+import { TerminalComponent } from '../dashboard/components/Terminal';
+import { Terminal } from 'xterm';
+import { AlertCircle } from 'lucide-react';
 
 interface LivePreviewViewProps {
-  project: Project | null;
-  loading: boolean;
-  onReturnToTerminal: () => void;
+  project: {
+    files: Record<string, string>;
+    config?: ProjectConfig;
+  };
+  workspace?: WorkspaceType;
+  useProxy?: boolean;
+  loading?: boolean;
+  onReturnToTerminal?: () => void;
 }
 
-const LivePreviewView: React.FC<LivePreviewViewProps> = ({ project, loading, onReturnToTerminal }) => {
-  const [useProxy, setUseProxy] = React.useState(false);
+const LivePreviewView: React.FC<LivePreviewViewProps> = ({ 
+  project, 
+  workspace = 'app', 
+  useProxy,
+  loading,
+  onReturnToTerminal
+}) => {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isBooting, setIsBooting] = useState(true);
+  const [bootStatus, setBootStatus] = useState('Initializing WebContainer...');
+  const terminalRef = useRef<Terminal | null>(null);
+  const hasMounted = useRef(false);
 
   useEffect(() => {
-    if (project) {
-      // Inject <base> tag into index.html for proxy mode
-      const files = { ...project.files };
-      if (files['index.html']) {
-        const baseTag = `<base href="${window.location.origin}/__preview/">`;
-        if (!files['index.html'].includes('<base')) {
-          files['index.html'] = files['index.html'].replace('<head>', `<head>\n    ${baseTag}`);
-        }
-      }
-      PreviewService.updateFiles(files);
+    // Always update PreviewService files for fallback/standalone preview
+    PreviewService.updateFiles(project.files);
+
+    if (!window.crossOriginIsolated) {
+      setPreviewUrl(PreviewService.getPreviewUrl());
+      setIsBooting(false);
+      return;
     }
-  }, [project]);
+    
+    if (!project.files || Object.keys(project.files).length === 0) return;
+    
+    const formattedFiles: Record<string, string> = {};
+    const prefix = `${workspace}/`;
+    
+    for (const [path, content] of Object.entries(project.files)) {
+      let normalizedPath = path;
+      if (path.startsWith(prefix)) {
+        normalizedPath = path.slice(prefix.length);
+      } else if (path.includes('/') && (path.startsWith('app/') || path.startsWith('admin/'))) {
+        continue;
+      }
+      formattedFiles[normalizedPath] = content;
+    }
 
-  if (loading) {
+    if (!formattedFiles['package.json']) {
+      formattedFiles['package.json'] = JSON.stringify({
+        name: "preview-app",
+        type: "module",
+        scripts: { dev: "vite" },
+        dependencies: { react: "^18.2.0", "react-dom": "^18.2.0" },
+        devDependencies: { vite: "^5.0.0", "@vitejs/plugin-react": "^4.2.0" }
+      }, null, 2);
+    }
+
+    if (!formattedFiles['vite.config.ts'] && !formattedFiles['vite.config.js']) {
+      formattedFiles['vite.config.ts'] = `import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\nexport default defineConfig({ plugins: [react()] });`;
+    }
+
+    // Only mount and boot once
+    if (hasMounted.current) {
+      // Update files dynamically
+      Object.entries(formattedFiles).forEach(([path, content]) => {
+        WebContainerService.updateFile(path, content);
+      });
+      return;
+    }
+    hasMounted.current = true;
+
+    const initWebContainer = async () => {
+      try {
+        setIsBooting(true);
+        
+        // 2. Boot and Mount
+        setBootStatus('Mounting files...');
+        await WebContainerService.mountFiles(formattedFiles);
+
+        // 3. Listen for URL
+        WebContainerService.onUrlChange((url) => {
+          setPreviewUrl(url);
+          setIsBooting(false);
+        });
+
+        // 4. Run npm install
+        setBootStatus('Running npm install...');
+        const installExitCode = await WebContainerService.runCommand('npm', ['install'], (data) => {
+          terminalRef.current?.write(data);
+        });
+
+        if (installExitCode !== 0) {
+          terminalRef.current?.write('\\r\\n[Error] npm install failed.\\r\\n');
+          setBootStatus('Failed to install dependencies.');
+          return;
+        }
+
+        // 5. Run dev server
+        setBootStatus('Starting dev server...');
+        await WebContainerService.runCommand('npm', ['run', 'dev'], (data) => {
+          terminalRef.current?.write(data);
+        });
+
+      } catch (error: any) {
+        console.error("WebContainer Error:", error);
+        setBootStatus(`Error: ${error.message}`);
+        terminalRef.current?.write(`\\r\\n[Fatal Error] ${error.message}\\r\\n`);
+      }
+    };
+
+    initWebContainer();
+  }, [project.files, workspace]);
+
+  if (loading || !project.files || Object.keys(project.files).length === 0) {
     return (
-      <div className="h-[100dvh] w-full bg-[#09090b] flex flex-col items-center justify-center gap-6">
-        <Loader2 className="animate-spin text-pink-500" size={40}/>
-        <p className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-600">Initializing Uplink...</p>
+      <div className="h-screen w-full bg-[#09090b] flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <div className="w-12 h-12 border-4 border-pink-500/20 border-t-pink-500 rounded-full animate-spin mx-auto"></div>
+          <p className="text-zinc-500 font-black uppercase text-xs tracking-widest">Initializing Preview...</p>
+        </div>
       </div>
     );
   }
-
-  if (!project) {
-    return (
-      <div className="h-[100dvh] w-full bg-[#09090b] flex flex-col items-center justify-center gap-4 p-10 text-center">
-        <h1 className="text-2xl font-black text-white uppercase">Project Offline</h1>
-        <p className="text-zinc-600 text-xs uppercase font-bold">The developer has not authorized this uplink or it has been terminated.</p>
-        <button onClick={onReturnToTerminal} className="mt-6 px-10 py-4 bg-pink-600 rounded-2xl font-black uppercase text-[10px]">Return to Terminal</button>
-      </div>
-    );
-  }
-
-  // Format files for Sandpack (ensure leading slash and inject .env)
-  const sandpackFiles: Record<string, string> = {};
-  for (const [path, content] of Object.entries(project.files)) {
-    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-    sandpackFiles[normalizedPath] = content;
-  }
-
-  // Inject .env file
-  let envContent = '';
-  if (project.config?.supabase_url) {
-    envContent += `VITE_SUPABASE_URL=${project.config.supabase_url}\n`;
-  }
-  if (project.config?.supabase_key) {
-    envContent += `VITE_SUPABASE_ANON_KEY=${project.config.supabase_key}\n`;
-  }
-  if (envContent) {
-    sandpackFiles['/.env'] = envContent;
-  }
-
-  // Extract dynamic dependencies from project files
-  const dynamicDependencies = extractDependencies(project.files);
 
   return (
     <div className="h-[100dvh] w-full bg-[#09090b] flex flex-col relative">
-      <div className="flex-1 w-full relative h-full">
-        {useProxy ? (
-          <iframe 
-            src={PreviewService.getPreviewUrl()} 
-            className="w-full h-full border-none bg-white"
-            title="Custom Preview"
-          />
-        ) : (
-          <SandpackProvider 
-            template="vite-react-ts" 
-            files={sandpackFiles}
-            customSetup={{
-              dependencies: dynamicDependencies
-            }}
-          >
-            <SandpackPreview 
-              showOpenInCodeSandbox={false} 
-              showRefreshButton={false} 
-              style={{ width: '100%', height: '100%', border: 'none', background: '#09090b' }} 
-            />
-          </SandpackProvider>
-        )}
+      <div className="flex-1 w-full relative h-2/3">
+        {isBooting && !previewUrl ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-[#09090b] z-10">
+            <div className="text-center space-y-4">
+              <div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mx-auto"></div>
+              <p className="text-zinc-400 font-mono text-sm">{bootStatus}</p>
+            </div>
+          </div>
+        ) : null}
         
-        <div className="fixed bottom-10 right-10 flex flex-col gap-4 z-50">
-           <button 
-             onClick={() => setUseProxy(!useProxy)} 
-             className={`p-4 ${useProxy ? 'bg-blue-600' : 'bg-zinc-800'} text-white rounded-2xl shadow-2xl active:scale-90 transition-all`}
-             title={useProxy ? "Switch to Sandpack" : "Switch to Custom Proxy"}
-           >
-             <Globe size={20}/>
-           </button>
-           <button onClick={() => window.location.reload()} className="p-4 bg-pink-600 text-white rounded-2xl shadow-2xl active:scale-90 transition-all">
-             <RefreshCw size={20}/>
-           </button>
-           <button onClick={onReturnToTerminal} className="p-4 bg-white/10 backdrop-blur-xl border border-white/10 text-white rounded-2xl shadow-2xl active:scale-90 transition-all">
-             <Smartphone size={20}/>
-           </button>
-        </div>
+        {previewUrl && (
+          <iframe 
+            src={previewUrl} 
+            className="w-full h-full border-none bg-white"
+            title="Preview"
+            allow="cross-origin-isolated"
+          />
+        )}
+
+        {!window.crossOriginIsolated && (
+          <div className="absolute top-4 left-4 right-4 z-20">
+            <div className="glass-tech p-3 rounded-lg flex items-center gap-3 border-pink-500/30 bg-pink-500/10">
+              <AlertCircle size={18} className="text-pink-500 shrink-0" />
+              <div className="flex-1">
+                <p className="text-[10px] font-black text-pink-500 uppercase tracking-widest">Compatibility Mode</p>
+                <p className="text-[10px] text-zinc-400">Node.js features disabled. Open in New Tab for full power.</p>
+              </div>
+              <button 
+                onClick={() => window.open(window.location.href, '_blank')}
+                className="px-3 py-1 bg-pink-500 text-white text-[10px] font-bold rounded-full uppercase"
+              >
+                New Tab
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+      
+      {/* Terminal View - Only show if isolated */}
+      {window.crossOriginIsolated && (
+        <div className="h-1/3 w-full border-t border-zinc-800 bg-[#09090b] p-2">
+          <div className="text-xs text-zinc-500 font-mono mb-2 px-2 flex justify-between">
+            <span>WebContainer Terminal</span>
+          </div>
+          <div className="h-[calc(100%-24px)] w-full">
+            <TerminalComponent onInit={(term) => { terminalRef.current = term; }} />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

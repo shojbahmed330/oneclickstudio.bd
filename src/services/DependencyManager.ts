@@ -1,12 +1,14 @@
 import { DependencyNode } from "../types";
 import { DiffEngine } from "./DiffEngine";
 import { Validator } from "./Validator";
+import { ValidatorUtils } from "./validators/ValidatorUtils";
 
 export class DependencyManager {
   private dependencyGraph: DependencyNode[] = [];
   private dependencyNodeCache = new Map<string, { hash: string, node: DependencyNode }>();
   private diffEngine: DiffEngine;
   private validator: Validator;
+  private validatorUtils = new ValidatorUtils();
 
   constructor(diffEngine: DiffEngine, validator: Validator) {
     this.diffEngine = diffEngine;
@@ -33,16 +35,16 @@ export class DependencyManager {
       const cached = this.dependencyNodeCache.get(filePath);
 
       if (!cached || cached.hash !== hash) {
-        const rawImports = this.validator.extractImports(content);
+        const rawImports = this.validatorUtils.extractImports(content);
         const resolvedImports: string[] = [];
 
         for (const imp of rawImports) {
-          const resolved = this.validator.resolveImportPath(filePath, imp, files);
+          const resolved = this.validatorUtils.resolveImportPath(filePath, imp, files);
           if (resolved) resolvedImports.push(resolved);
         }
 
         const node: DependencyNode = { 
-          file: this.validator.normalizePath(filePath), 
+          file: this.validatorUtils.normalizePath(filePath), 
           imports: resolvedImports,
           tablesUsed: this.extractTables(content),
           apisUsed: this.extractAPIs(content),

@@ -114,4 +114,15 @@ export class DatabaseService {
   async createPackage(pkg: Partial<Package>): Promise<void> { await this.supabase.from('packages').insert(pkg); }
   async updatePackage(id: string, pkg: Partial<Package>): Promise<void> { await this.supabase.from('packages').update(pkg).eq('id', id); }
   async deletePackage(id: string): Promise<void> { await this.supabase.from('packages').delete().eq('id', id); }
+
+  async saveLearnedError(entry: any): Promise<void> {
+    const { error } = await this.supabase.from('learned_errors').insert([entry]);
+    if (error) throw error;
+  }
+
+  async getLearnedErrors(): Promise<any[]> {
+    const { data, error } = await this.supabase.from('learned_errors').select('*');
+    if (error) return [];
+    return data || [];
+  }
 }

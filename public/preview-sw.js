@@ -1,5 +1,6 @@
 const PREVIEW_ORIGIN = 'https://preview.local';
 const CACHE_NAME = 'preview-cache-v1';
+let lastActiveClientId = null;
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -9,13 +10,49 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(clients.claim());
 });
 
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'FILES_UPDATED') {
+    lastActiveClientId = event.source.id;
+    console.log('Service Worker: Files updated, tracking client:', lastActiveClientId);
+  }
+});
+
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   
-  // Only intercept requests for our virtual domain
+  // 1. Intercept requests for our virtual preview domain
   if (url.origin === PREVIEW_ORIGIN || url.pathname.startsWith('/__preview/')) {
     event.respondWith(handlePreviewRequest(event.request));
+    return;
   }
+
+  // 2. Inject COOP/COEP headers for ALL other requests (to enable WebContainers)
+  if (event.request.cache === "only-if-cached" && event.request.mode !== "same-origin") {
+    return;
+  }
+
+  event.respondWith(
+    fetch(event.request)
+      .then(response => {
+        if (response.status === 0 || !response.ok) {
+          return response;
+        }
+
+        const newHeaders = new Headers(response.headers);
+        newHeaders.set("Cross-Origin-Embedder-Policy", "require-corp");
+        newHeaders.set("Cross-Origin-Opener-Policy", "same-origin");
+
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: newHeaders
+        });
+      })
+      .catch(e => {
+        // Fallback for failed fetches
+        return fetch(event.request);
+      })
+  );
 });
 
 async function handlePreviewRequest(request) {
@@ -30,30 +67,41 @@ async function handlePreviewRequest(request) {
   if (path === '/' || path === '') {
     path = '/index.html';
   }
-
+ 
   // Communicate with the main thread to get the file content
-  const clientList = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+  let client = null;
+  if (lastActiveClientId) {
+    client = await clients.get(lastActiveClientId);
+  }
+  
+  if (!client) {
+    const clientList = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    client = clientList[0];
+  }
   
   return new Promise((resolve) => {
-    if (clientList.length === 0) {
-      resolve(new Response('Preview environment not found', { status: 503 }));
+    if (!client) {
+      resolve(new Response('Preview environment not found. Please ensure the main editor tab is open.', { status: 503 }));
       return;
     }
 
-    // We'll use the first available client to fetch the file from memory
+    // We'll use the selected client to fetch the file from memory
     const channel = new MessageChannel();
     channel.port1.onmessage = (event) => {
       if (event.data && event.data.content !== undefined) {
         const contentType = getContentType(path);
         resolve(new Response(event.data.content, {
-          headers: { 'Content-Type': contentType }
+          headers: { 
+            'Content-Type': contentType,
+            'Cache-Control': 'no-cache, no-store, must-revalidate'
+          }
         }));
       } else {
-        resolve(new Response('File not found', { status: 404 }));
+        resolve(new Response('File not found: ' + path, { status: 404 }));
       }
     };
 
-    clientList[0].postMessage({
+    client.postMessage({
       type: 'GET_FILE',
       path: path.startsWith('/') ? path.slice(1) : path
     }, [channel.port2]);

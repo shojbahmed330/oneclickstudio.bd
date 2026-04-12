@@ -23,7 +23,7 @@ const AppConfigView: React.FC<AppConfigViewProps> = ({ config, onUpdate, onBack,
     if (!config.key_alias && config.appName) {
        onUpdate({ ...config, key_alias: KeystoreService.generateCleanAlias(config.appName) });
     }
-  }, [config.appName]);
+  }, [config.appName, config.key_alias, onUpdate, config]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'icon' | 'splash' | 'keystore_base64') => {
     const file = e.target.files?.[0];

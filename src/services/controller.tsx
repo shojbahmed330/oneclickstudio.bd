@@ -3,11 +3,14 @@ import { GenerationMode, GenerationResult, WorkspaceType, ChatMessage } from "..
 import { ModeDetector } from "./ModeDetector";
 import { DiffEngine } from "./DiffEngine";
 import { Validator } from "./Validator";
+import { ContentValidator } from "./validators/ContentValidator";
+import { ProjectValidator } from "./validators/ProjectValidator";
+import { ValidatorUtils } from "./validators/ValidatorUtils";
 import { Orchestrator } from "./Orchestrator";
 import { GeminiService } from "./geminiService";
 import { SelfHealingService } from "./selfHealingService";
 import { addJsxAttribute, updateVariableValue } from "../utils/astModifier";
-import { ERROR_KNOWLEDGE_BASE } from "../constants/errorKnowledgeBase";
+import { KnowledgeBaseService } from "./KnowledgeBaseService";
 
 import { Logger } from "./Logger";
 import { StateManager } from "./StateManager";
@@ -20,9 +23,12 @@ export class AIController {
   private validator: Validator;
   private orchestrator: Orchestrator;
   private selfHealingService: SelfHealingService;
+  private knowledgeBaseService: KnowledgeBaseService;
   
   private stateManager: StateManager;
   private dependencyManager: DependencyManager;
+  private contentValidator = new ContentValidator();
+  private projectValidator = new ProjectValidator(new ValidatorUtils());
 
   constructor(
     diffEngine?: DiffEngine,
@@ -38,6 +44,7 @@ export class AIController {
       const geminiService = gemini || new GeminiService();
       this.orchestrator = orchestrator || new Orchestrator(this.diffEngine, geminiService);
       this.selfHealingService = new SelfHealingService(this, this.validator);
+      this.knowledgeBaseService = KnowledgeBaseService.getInstance();
       
       this.stateManager = new StateManager();
       this.dependencyManager = new DependencyManager(this.diffEngine, this.validator);
@@ -45,6 +52,24 @@ export class AIController {
       Logger.error("Initialization failed", error, { component: 'AIController' });
       throw new Error("Failed to initialize AI Controller dependencies.");
     }
+  }
+
+  private sortPlanByDependency(plan: any[]): any[] {
+    const getPriority = (step: any): number => {
+      const stepText = typeof step === 'object' && step !== null ? JSON.stringify(step).toLowerCase() : String(step).toLowerCase();
+      
+      if (stepText.includes('types.ts') || stepText.includes('.types.')) return 1;
+      if (stepText.includes('utils/') || stepText.includes('helpers/') || stepText.includes('util') || stepText.includes('helper')) return 2;
+      if (stepText.includes('services/') || stepText.includes('api/') || stepText.includes('service') || stepText.includes('api')) return 3;
+      if (stepText.includes('components/') || stepText.includes('component')) return 4;
+      if (stepText.includes('pages/') || stepText.includes('screens/') || stepText.includes('page') || stepText.includes('screen')) return 5;
+      if (stepText.includes('app.tsx') || stepText.includes('main.tsx') || stepText.includes('routes.') || stepText.includes('router')) return 6;
+      if (stepText.includes('schema.sql') || stepText.includes('database.sql')) return 7;
+
+      return 10;
+    };
+
+    return [...plan].sort((a, b) => getPriority(a) - getPriority(b));
   }
 
   /**
@@ -93,13 +118,13 @@ export class AIController {
 
     // 3. Orchestration Loop
     let attempts = 0;
-    const maxAttempts = 4; // 1 initial attempt + 3 retries
+    const maxAttempts = 20; // Effectively unlimited retries until accurate code is generated
     let finalResult: GenerationResult | null = null;
     let failedPatchFiles = new Set<string>();
 
     // 3.1 Pre-emptive Detection: If files are already broken, force full rewrite
     yield { type: 'status', phase: 'PLANNING', message: "Checking for broken files..." };
-    const initialErrors = this.validator.validateTypeScriptSyntax(currentFiles);
+    const initialErrors = this.contentValidator.validateTypeScriptSyntax(currentFiles);
     for (const err of initialErrors) {
       const match = err.match(/TS Syntax Error in ([^:]+):/);
       if (match && match[1]) {
@@ -131,8 +156,8 @@ export class AIController {
           currentPrompt += `\n\n🚨 CRITICAL RECOVERY MODE:\nYou previously failed to generate valid patches for these files:\n${Array.from(failedPatchFiles).map(f => `- ${f}`).join('\n')}\n\nFor these specific files ONLY, DO NOT USE PATCHES. You MUST return the FULL, complete file content.`;
         }
 
-        // Helper to apply files and accumulate errors
-        const applyAndValidateGeneratedFiles = (phaseFiles: Record<string, string> | any[], astEdits?: any[]) => {
+        // Helper to apply files to a context and return normalized files
+        const applyToContext = (targetContext: Record<string, string>, phaseFiles: Record<string, string> | any[], astEdits?: any[]) => {
           let normalizedPhaseFiles: Record<string, string> = {};
           if (Array.isArray(phaseFiles)) {
             for (const item of phaseFiles) {
@@ -148,32 +173,27 @@ export class AIController {
             normalizedPhaseFiles = phaseFiles as Record<string, string>;
           }
 
-          // Apply AST Edits first
+          // Apply AST Edits
           if (astEdits && Array.isArray(astEdits)) {
             for (const edit of astEdits) {
               const file = edit.file;
-              if (file && currentContextFiles[file]) {
+              if (file && targetContext[file]) {
                 try {
-                  let updatedCode = currentContextFiles[file];
+                  let updatedCode = targetContext[file];
                   if (edit.action === 'add_jsx_attribute') {
                     updatedCode = addJsxAttribute(updatedCode, edit.component, edit.attribute, edit.value, edit.isExpression);
                   } else if (edit.action === 'update_variable') {
                     updatedCode = updateVariableValue(updatedCode, edit.variable, edit.value, edit.isString);
                   }
                   normalizedPhaseFiles[file] = updatedCode;
-                  Logger.info(`Applied AST edit to ${file}: ${edit.action}`, logContext);
                 } catch (e) {
-                  Logger.error(`Failed to apply AST edit to ${file}`, e, logContext);
                   accumulatedApplyErrors.push(`Failed to apply AST edit to ${file}: ${e}`);
                 }
               }
             }
           }
 
-          generatedFilesThisAttempt = { ...generatedFilesThisAttempt, ...normalizedPhaseFiles };
-          allGeneratedFiles = { ...allGeneratedFiles, ...normalizedPhaseFiles };
-          const { merged, errors } = this.diffEngine.applyChanges(currentContextFiles, normalizedPhaseFiles, failedPatchFiles);
-          currentContextFiles = merged;
+          const { merged, errors } = this.diffEngine.applyChanges(targetContext, normalizedPhaseFiles, failedPatchFiles);
           accumulatedApplyErrors.push(...errors);
 
           for (const err of errors) {
@@ -182,12 +202,11 @@ export class AIController {
             const target = (patchMatch && patchMatch[1]) || (fullFileMatch && fullFileMatch[1]);
             if (target) {
               const cleanedTarget = target.replace(/[,.]$/, '').trim();
-              Logger.warn(`Adding ${cleanedTarget} to failedPatchFiles for recovery.`, logContext);
               failedPatchFiles.add(cleanedTarget);
             }
           }
 
-          this.dependencyManager.updateDependencyGraph(currentContextFiles); // Update graph with newly merged files
+          return { merged, normalizedPhaseFiles };
         };
 
         const isPatchMode = false; // Disabled: Always use full files for reliability
@@ -208,14 +227,17 @@ export class AIController {
           const plan = await this.orchestrator.executePhaseWithCache('planning', input, modelName, this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
           thoughts.push(`[PLAN]: ${plan.thought || 'Planned architecture.'}`);
           finalPlan = plan.plan || [];
+          finalPlan = this.sortPlanByDependency(finalPlan);
           
           yield { type: 'plan', plan: finalPlan, thought: plan.thought };
 
           // Pre-apply dependency audit on the plan itself (Pass A validation)
-          const planValidationErrors = this.validator.validatePlan(finalPlan, currentContextFiles);
+          const planValidationErrors = this.projectValidator.validatePlan(finalPlan, currentContextFiles);
           if (planValidationErrors.length > 0) {
-            // If plan validation fails, do not proceed to coding
-            throw new Error(`Plan validation failed: ${planValidationErrors.join('; ')}`);
+            Logger.warn(`Plan validation failed. Attempting to fix plan...`, { errors: planValidationErrors });
+            errorContext += `\n\n🚨 PLAN VALIDATION ERROR:\nYour previous plan was rejected for the following reasons:\n${planValidationErrors.map(e => `- ${e}`).join('\n')}\n\nPlease generate a NEW, corrected plan that follows the dependency order and correctly identifies which files need to be CREATED vs UPDATED.`;
+            attempts++;
+            continue; // Retry planning
           }
         }
 
@@ -223,24 +245,32 @@ export class AIController {
         if (phases.includes("coding")) {
           yield { type: 'status', phase: 'CODING', message: "Generating code..." };
           
-          if (activeMode === GenerationMode.SCAFFOLD && finalPlan && finalPlan.length > 0) {
-            let accumulatedFiles: Record<string, string> = {};
-            let accumulatedAstEdits: any[] = [];
+          if ((activeMode === GenerationMode.SCAFFOLD || activeMode === GenerationMode.EDIT) && finalPlan && finalPlan.length > 0) {
             let completedIndices: number[] = [];
+            let scaffoldAborted = false;
             
             for (let i = 0; i < finalPlan.length; i++) {
+              // Save checkpoint before each main step
+              this.stateManager.saveCheckpoint(allGeneratedFiles);
+              const mainStepCheckpoint = { ...allGeneratedFiles };
+              const mainContextCheckpoint = { ...currentContextFiles };
+
               const step = finalPlan[i];
               yield { type: 'plan_progress', activePlanIndex: i, completedPlanIndices: completedIndices };
               const stepTitle = typeof step === 'object' && step !== null ? ((step as any).title || (step as any).step || 'Step ' + (i+1)) : step;
               
               const subPlans = typeof step === 'object' && step !== null && Array.isArray((step as any).subPlans) ? (step as any).subPlans : [];
               
+              let stepFiles: Record<string, string> = {};
+
               if (subPlans.length > 0) {
                 for (let j = 0; j < subPlans.length; j++) {
+                  const subCheckpoint = { ...allGeneratedFiles };
+                  const subContextCheckpoint = { ...currentContextFiles };
+
                   const subPlan = subPlans[j];
                   const subPlanTitle = typeof subPlan === 'string' ? subPlan : JSON.stringify(subPlan);
                   
-                  // Truncate subPlanTitle if it's too long for the UI
                   const displayTitle = subPlanTitle.length > 60 ? subPlanTitle.substring(0, 60) + '...' : subPlanTitle;
                   yield { type: 'status', phase: 'CODING', message: `Implementing: ${stepTitle} ➔ ${displayTitle}` };
                   
@@ -248,16 +278,76 @@ export class AIController {
                   
                   const code = await this.orchestrator.executePhaseWithCache('coding', stepInput, modelName, this.stateManager.phaseCache, false, projectConfig);
                   
+                  let subPlanFiles: Record<string, string> = {};
                   if (code.files) {
-                    accumulatedFiles = { ...accumulatedFiles, ...code.files };
-                    currentContextFiles = { ...currentContextFiles, ...code.files };
-                  }
-                  if (code.ast_edits) {
-                    accumulatedAstEdits.push(...code.ast_edits);
+                    subPlanFiles = code.files;
                   }
                   if (code.answer) {
                     finalAnswer = code.answer;
                   }
+
+                  // Transactional Staging & Validation
+                  let { merged, normalizedPhaseFiles } = applyToContext({ ...currentContextFiles }, subPlanFiles, code.ast_edits || []);
+                  let subPlanErrors = await this.validator.validateOutput(normalizedPhaseFiles, merged, this.dependencyManager.getGraph(), currentPrompt);
+                  subPlanErrors.push(...accumulatedApplyErrors);
+                  accumulatedApplyErrors = [];
+
+                  let subFixAttempts = 0;
+                  while (subPlanErrors.length > 0 && subFixAttempts < 3) {
+                    yield { type: 'status', phase: 'FIXING', message: `Fixing errors in sub-plan: ${displayTitle}... (Attempt ${subFixAttempts + 1}/3)` };
+                    
+                    const healingResult = this.selfHealingService.attemptHeal(subPlanFiles, subPlanErrors);
+                    subPlanFiles = healingResult.healedFiles;
+                    subPlanErrors = healingResult.remainingErrors;
+
+                    if (healingResult.detectedMissingTypes.length > 0) {
+                      const typeHealResult = await this.selfHealingService.runTypeHealingLoop(subPlanFiles, subPlanErrors);
+                      subPlanFiles = typeHealResult.healedFiles;
+                      subPlanErrors = typeHealResult.remainingErrors;
+                    }
+
+                    const fixApply = applyToContext({ ...currentContextFiles }, subPlanFiles, []);
+                    merged = fixApply.merged;
+                    normalizedPhaseFiles = fixApply.normalizedPhaseFiles;
+                    
+                    if (subPlanErrors.length > 0) {
+                      const fixInput = `USER REQUEST (FIX ERROR in ${displayTitle}):\n${ErrorContextBuilder.build(subPlanErrors, subFixAttempts, subPlanFiles)}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
+                      const fixCode = await this.orchestrator.executePhaseWithCache('coding', fixInput, modelName, this.stateManager.phaseCache, true, projectConfig);
+                      if (fixCode.files) {
+                        subPlanFiles = { ...subPlanFiles, ...fixCode.files };
+                        const finalFixApply = applyToContext({ ...currentContextFiles }, subPlanFiles, fixCode.ast_edits || []);
+                        merged = finalFixApply.merged;
+                        normalizedPhaseFiles = finalFixApply.normalizedPhaseFiles;
+                      }
+                      subPlanErrors = await this.validator.validateOutput(subPlanFiles, merged, this.dependencyManager.getGraph(), currentPrompt);
+                      subPlanErrors.push(...accumulatedApplyErrors);
+                      accumulatedApplyErrors = [];
+                    }
+                    subFixAttempts++;
+                  }
+
+                  if (subPlanErrors.length > 0) {
+                    yield { type: 'status', phase: 'FIXING', message: `Failed to fix sub-plan errors. Rolling back sub-plan.` };
+                    allGeneratedFiles = subCheckpoint;
+                    currentContextFiles = subContextCheckpoint;
+                    scaffoldAborted = true;
+                    break;
+                  }
+
+                  // Commit sub-plan
+                  allGeneratedFiles = { ...allGeneratedFiles, ...subPlanFiles };
+                  generatedFilesThisAttempt = { ...generatedFilesThisAttempt, ...subPlanFiles };
+                  currentContextFiles = merged;
+                  stepFiles = { ...stepFiles, ...subPlanFiles };
+                  this.dependencyManager.updateDependencyGraph(currentContextFiles);
+                }
+                if (scaffoldAborted) {
+                  const lastGoodState = this.stateManager.rollback();
+                  if (lastGoodState) {
+                    allGeneratedFiles = lastGoodState;
+                    currentContextFiles = mainContextCheckpoint;
+                  }
+                  break;
                 }
               } else {
                 yield { type: 'status', phase: 'CODING', message: `Implementing: ${stepTitle}` };
@@ -267,32 +357,91 @@ export class AIController {
                 const code = await this.orchestrator.executePhaseWithCache('coding', stepInput, modelName, this.stateManager.phaseCache, false, projectConfig);
                 
                 if (code.files) {
-                  accumulatedFiles = { ...accumulatedFiles, ...code.files };
-                  currentContextFiles = { ...currentContextFiles, ...code.files };
-                }
-                if (code.ast_edits) {
-                  accumulatedAstEdits.push(...code.ast_edits);
+                  stepFiles = { ...stepFiles, ...code.files };
                 }
                 if (code.answer) {
                   finalAnswer = code.answer;
                 }
+
+                // Transactional Staging & Validation
+                let { merged, normalizedPhaseFiles } = applyToContext({ ...currentContextFiles }, stepFiles, code.ast_edits || []);
+                let stepErrors = await this.validator.validateOutput(normalizedPhaseFiles, merged, this.dependencyManager.getGraph(), currentPrompt);
+                stepErrors.push(...accumulatedApplyErrors);
+                accumulatedApplyErrors = [];
+
+                let fixAttempts = 0;
+                const maxStepFixAttempts = 5;
+                while (stepErrors.length > 0 && fixAttempts < maxStepFixAttempts) {
+                  yield { type: 'status', phase: 'FIXING', message: `Fixing errors in ${stepTitle}... (${stepErrors.length} issues, attempt ${fixAttempts + 1}/${maxStepFixAttempts})` };
+                  
+                  const healingResult = this.selfHealingService.attemptHeal(stepFiles, stepErrors);
+                  stepFiles = healingResult.healedFiles;
+                  stepErrors = healingResult.remainingErrors;
+
+                  if (healingResult.detectedMissingTypes.length > 0) {
+                    const typeHealResult = await this.selfHealingService.runTypeHealingLoop(stepFiles, stepErrors);
+                    stepFiles = typeHealResult.healedFiles;
+                    stepErrors = typeHealResult.remainingErrors;
+                  }
+
+                  const fixApply = applyToContext({ ...currentContextFiles }, stepFiles, []);
+                  merged = fixApply.merged;
+                  normalizedPhaseFiles = fixApply.normalizedPhaseFiles;
+
+                  if (stepErrors.length > 0) {
+                    const fixInput = `USER REQUEST (FIX ERROR in ${stepTitle}):\n${ErrorContextBuilder.build(stepErrors, fixAttempts, stepFiles)}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
+                    const fixCode = await this.orchestrator.executePhaseWithCache('coding', fixInput, modelName, this.stateManager.phaseCache, true, projectConfig);
+                    
+                    if (fixCode.files) {
+                      stepFiles = { ...stepFiles, ...fixCode.files };
+                      const finalFixApply = applyToContext({ ...currentContextFiles }, stepFiles, fixCode.ast_edits || []);
+                      merged = finalFixApply.merged;
+                      normalizedPhaseFiles = finalFixApply.normalizedPhaseFiles;
+                    }
+                    
+                    stepErrors = await this.validator.validateOutput(normalizedPhaseFiles, merged, this.dependencyManager.getGraph(), currentPrompt);
+                    stepErrors.push(...accumulatedApplyErrors);
+                    accumulatedApplyErrors = [];
+                  }
+                  fixAttempts++;
+                }
+
+                if (stepErrors.length > 0) {
+                  yield { type: 'status', phase: 'FIXING', message: `Failed to fix errors in ${stepTitle}. Rolling back.` };
+                  allGeneratedFiles = mainStepCheckpoint;
+                  currentContextFiles = mainContextCheckpoint;
+                  scaffoldAborted = true;
+                  break;
+                }
+
+                // Commit main step
+                allGeneratedFiles = { ...allGeneratedFiles, ...stepFiles };
+                generatedFilesThisAttempt = { ...generatedFilesThisAttempt, ...stepFiles };
+                currentContextFiles = merged;
+                this.dependencyManager.updateDependencyGraph(currentContextFiles);
               }
+
               completedIndices.push(i);
             }
             
+            if (scaffoldAborted) {
+              break;
+            }
+
             yield { type: 'plan_progress', activePlanIndex: -1, completedPlanIndices: completedIndices };
-            
-            thoughts.push(`[CODE]: Implemented all plan steps.`);
-            applyAndValidateGeneratedFiles(accumulatedFiles, accumulatedAstEdits);
+            thoughts.push(`[CODE]: Implemented all plan steps with transactional validation and rollback support.`);
           } else {
             const codingPrompt = currentPrompt + strictEditBoundaryInstruction;
-            const input = activeMode === GenerationMode.SCAFFOLD 
+            const input = (finalPlan && finalPlan.length > 0)
               ? `PLAN:\n${JSON.stringify(finalPlan)}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`
               : `USER REQUEST:\n${codingPrompt}${patchInstruction}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
             const code = await this.orchestrator.executePhaseWithCache('coding', input, modelName, this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
             thoughts.push(`[CODE]: ${code.thought || 'Implemented code.'}`);
             if (code.answer) finalAnswer = code.answer;
-            applyAndValidateGeneratedFiles(code.files || {}, code.ast_edits);
+            const { merged } = applyToContext(currentContextFiles, code.files || {}, code.ast_edits);
+            currentContextFiles = merged;
+            allGeneratedFiles = { ...allGeneratedFiles, ...(code.files || {}) };
+            generatedFilesThisAttempt = { ...generatedFilesThisAttempt, ...(code.files || {}) };
           }
         }
 
@@ -300,48 +449,55 @@ export class AIController {
         if (phases.includes("review")) {
           yield { type: 'status', phase: 'REVIEW', message: "Reviewing implementation..." };
           const reviewPrompt = currentPrompt + strictEditBoundaryInstruction;
-          const input = activeMode === GenerationMode.FIX
-            ? `USER REQUEST (FIX ERROR):\n${reviewPrompt}${patchInstruction}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`
-            : `GENERATED FILES:\n${JSON.stringify(generatedFilesThisAttempt)}${patchInstruction}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
+          
+          // CRITICAL: Always include the files generated in this attempt for review
+          const input = `GENERATED FILES IN THIS ATTEMPT:\n${JSON.stringify(generatedFilesThisAttempt, null, 2)}\n\n${patchInstruction}\n\nUSER REQUEST:\n${reviewPrompt}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
+          
           const review = await this.orchestrator.executePhaseWithCache('review', input, modelName, this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
           thoughts.push(`[REVIEW]: ${review.thought || 'Reviewed code.'}`);
           if (activeMode === GenerationMode.FIX && review.answer) finalAnswer = review.answer;
-          applyAndValidateGeneratedFiles(review.files || {}, review.ast_edits);
+          const reviewResult = applyToContext(currentContextFiles, review.files || {}, review.ast_edits);
+          currentContextFiles = reviewResult.merged;
+          allGeneratedFiles = { ...allGeneratedFiles, ...reviewResult.normalizedPhaseFiles };
+          generatedFilesThisAttempt = { ...generatedFilesThisAttempt, ...reviewResult.normalizedPhaseFiles };
         }
 
         // Phase 4: Security
         if (phases.includes("security")) {
           yield { type: 'status', phase: 'SECURITY', message: "Security audit..." };
-          const input = activeMode === GenerationMode.OPTIMIZE
-            ? `USER REQUEST (OPTIMIZE SECURITY):\n${currentPrompt}${patchInstruction}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`
-            : `FILES TO SECURE:\n${JSON.stringify(generatedFilesThisAttempt)}${patchInstruction}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
+          const input = `FILES TO AUDIT:\n${JSON.stringify(generatedFilesThisAttempt, null, 2)}\n\n${patchInstruction}\n\nUSER REQUEST:\n${currentPrompt}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
           const security = await this.orchestrator.executePhaseWithCache('security', input, modelName, this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
           thoughts.push(`[SECURITY]: ${security.thought || 'Security audit complete.'}`);
           if (activeMode === GenerationMode.OPTIMIZE && security.answer) finalAnswer = security.answer;
-          applyAndValidateGeneratedFiles(security.files || {}, security.ast_edits);
+          const securityResult = applyToContext(currentContextFiles, security.files || {}, security.ast_edits);
+          currentContextFiles = securityResult.merged;
+          allGeneratedFiles = { ...allGeneratedFiles, ...securityResult.normalizedPhaseFiles };
+          generatedFilesThisAttempt = { ...generatedFilesThisAttempt, ...securityResult.normalizedPhaseFiles };
         }
 
         // Phase 5: Performance
         if (phases.includes("performance")) {
           yield { type: 'status', phase: 'PERFORMANCE', message: "Performance audit..." };
-          const input = activeMode === GenerationMode.OPTIMIZE
-            ? `USER REQUEST (OPTIMIZE PERFORMANCE):\n${currentPrompt}${patchInstruction}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`
-            : `FILES TO AUDIT:\n${JSON.stringify(generatedFilesThisAttempt)}${patchInstruction}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
+          const input = `FILES TO AUDIT:\n${JSON.stringify(generatedFilesThisAttempt, null, 2)}\n\n${patchInstruction}\n\nUSER REQUEST:\n${currentPrompt}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
           const perf = await this.orchestrator.executePhaseWithCache('performance', input, modelName, this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
           thoughts.push(`[PERF]: ${perf.thought || 'Performance audit complete.'}`);
-          applyAndValidateGeneratedFiles(perf.files || {}, perf.ast_edits);
+          const perfResult = applyToContext(currentContextFiles, perf.files || {}, perf.ast_edits);
+          currentContextFiles = perfResult.merged;
+          allGeneratedFiles = { ...allGeneratedFiles, ...perfResult.normalizedPhaseFiles };
+          generatedFilesThisAttempt = { ...generatedFilesThisAttempt, ...perfResult.normalizedPhaseFiles };
         }
 
         // Phase 6: UI/UX
         if (phases.includes("uiux")) {
           yield { type: 'status', phase: 'UIUX', message: "UI/UX polish..." };
-          const input = activeMode === GenerationMode.OPTIMIZE
-            ? `USER REQUEST (OPTIMIZE UI/UX):\n${currentPrompt}${patchInstruction}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`
-            : `FILES TO POLISH:\n${JSON.stringify(generatedFilesThisAttempt)}${patchInstruction}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
+          const input = `FILES TO POLISH:\n${JSON.stringify(generatedFilesThisAttempt, null, 2)}\n\n${patchInstruction}\n\nUSER REQUEST:\n${currentPrompt}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
           const uiux = await this.orchestrator.executePhaseWithCache('uiux', input, modelName, this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
           thoughts.push(`[UIUX]: ${uiux.thought || 'UI/UX polish complete.'}`);
           if (activeMode === GenerationMode.OPTIMIZE && uiux.answer) finalAnswer = uiux.answer;
-          applyAndValidateGeneratedFiles(uiux.files || {}, uiux.ast_edits);
+          const uiuxResult = applyToContext(currentContextFiles, uiux.files || {}, uiux.ast_edits);
+          currentContextFiles = uiuxResult.merged;
+          allGeneratedFiles = { ...allGeneratedFiles, ...uiuxResult.normalizedPhaseFiles };
+          generatedFilesThisAttempt = { ...generatedFilesThisAttempt, ...uiuxResult.normalizedPhaseFiles };
         }
 
         // 3.5 Patch Enforcement Check
@@ -364,7 +520,7 @@ export class AIController {
         yield { type: 'status', phase: 'VERIFICATION', message: "Running shadow build..." };
         
         let filesToValidateBeforeApply = allGeneratedFiles;
-        let preApplyValidationErrors = this.validator.validateOutput(filesToValidateBeforeApply, currentContextFiles, this.dependencyManager.getGraph(), currentPrompt);
+        let preApplyValidationErrors = await this.validator.validateOutput(filesToValidateBeforeApply, currentContextFiles, this.dependencyManager.getGraph(), currentPrompt);
         preApplyValidationErrors.push(...accumulatedApplyErrors);
 
         if (preApplyValidationErrors.length > 0) {
@@ -376,7 +532,7 @@ export class AIController {
 
           if (healingResult.detectedMissingTypes.length > 0) {
             yield { type: 'status', phase: 'FIXING', message: `Auto-generating missing types...` };
-            const typeHealResult = await this.selfHealingService.runTypeHealingLoop(healedFiles, remainingErrors);
+            const typeHealResult = await this.selfHealingService.runTypeHealingLoop(healedFiles, remainingErrors, modelName, projectConfig);
             healedFiles = typeHealResult.healedFiles;
             remainingErrors = typeHealResult.remainingErrors;
           }
@@ -405,7 +561,7 @@ export class AIController {
           Logger.warn(`Pre-apply validation failed (Attempt ${attempts + 1})`, { ...logContext, preApplyValidationErrors });
 
           // Fail-class aware retry for pre-apply errors
-          errorContext = ErrorContextBuilder.build(preApplyValidationErrors, attempts);
+          errorContext = ErrorContextBuilder.build(preApplyValidationErrors, attempts, generatedFilesThisAttempt);
           attempts++;
           continue; // Retry with new error context
         }
@@ -413,13 +569,13 @@ export class AIController {
         yield { type: 'status', phase: 'VERIFICATION', message: "Verification successful!" };
 
         // If pre-apply validation passes, then the changes are considered valid for merging.
-        // The `currentContextFiles` already holds the merged state after `applyAndValidateGeneratedFiles` calls.
+        // The `currentContextFiles` already holds the merged state after transactional application calls.
         const mergedFiles = currentContextFiles;
         this.dependencyManager.updateDependencyGraph(mergedFiles); // Final update after successful merge
 
         // 5. Runtime Validation (Post-apply sanity check - mostly for final structural consistency)
         yield { type: 'status', phase: 'REVIEW', message: "Validating final code structure..." };
-        const postApplyValidationErrors = this.validator.validateOutput(mergedFiles, mergedFiles, this.dependencyManager.getGraph(), currentPrompt);
+        const postApplyValidationErrors = await this.validator.validateOutput(mergedFiles, mergedFiles, this.dependencyManager.getGraph(), currentPrompt);
 
         if (postApplyValidationErrors.length > 0) {
           yield { type: 'status', phase: 'FIXING', message: `Finalizing auto-heal... (${postApplyValidationErrors.length} issues)` };
@@ -431,7 +587,7 @@ export class AIController {
           
           Logger.warn(`Post-apply validation failed (Attempt ${attempts + 1})`, { ...logContext, postApplyValidationErrors });
 
-          errorContext = ErrorContextBuilder.build(postApplyValidationErrors, attempts);
+          errorContext = ErrorContextBuilder.build(postApplyValidationErrors, attempts, generatedFilesThisAttempt);
           attempts++;
           continue; // Retry with new error context
         }
@@ -449,7 +605,9 @@ export class AIController {
             errorContext.split('\n').filter(l => l.startsWith('- এরর:')).map(l => l.replace('- এরর: ', '')),
             allGeneratedFiles,
             currentFiles,
-            ERROR_KNOWLEDGE_BASE
+            this.knowledgeBaseService.getFullKnowledgeBase(),
+            modelName,
+            projectConfig
           ).catch(e => Logger.error("Learning loop failed", e));
         }
 
@@ -480,20 +638,15 @@ export class AIController {
       }
     }
 
-    if (attempts >= maxAttempts) {
-      yield { type: 'status', phase: 'PREVIEW_READY', message: "Max attempts reached. Some files may have errors." };
-      yield { 
-        type: 'result', 
-        files: allGeneratedFiles, 
-        answer: finalAnswer + "\n\n⚠️ Note: The AI reached the maximum number of attempts to fix errors. Some files might still contain errors. Please review the code manually.",
-        thought: thoughts.join('\n\n'),
-        plan: finalPlan,
-        mode 
-      };
-      return;
-    }
-
-    throw new Error("Failed to generate code after multiple attempts.");
+    yield { type: 'status', phase: 'PREVIEW_READY', message: attempts >= maxAttempts ? "Max attempts reached. Some files may have errors." : "Finalizing build..." };
+    yield { 
+      type: 'result', 
+      files: allGeneratedFiles, 
+      answer: finalAnswer + (attempts >= maxAttempts ? "\n\n⚠️ Note: The AI reached the maximum number of attempts to fix errors. Some files might still contain errors. Please review the code manually." : ""),
+      thought: thoughts.join('\n\n'),
+      plan: finalPlan,
+      mode 
+    };
   }
 
   async *processRequestStream(

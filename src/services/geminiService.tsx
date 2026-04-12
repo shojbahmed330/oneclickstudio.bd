@@ -76,7 +76,7 @@ Example:
       return this.callPhaseWithOllama(modelName, systemInstruction, input);
     }
 
-    const key = process.env.GEMINI_API_KEY || process.env.API_KEY;
+    const key = import.meta.env.VITE_GEMINI_API_KEY || import.meta.env.VITE_API_KEY;
     if (!key || key === "undefined") throw new Error("GEMINI_API_KEY not found.");
 
     const ai = new GoogleGenAI({ apiKey: key });
@@ -122,7 +122,7 @@ Example:
   }
 
   private async callPhaseWithOpenRouter(model: string, system: string, prompt: string, retries: number, projectConfig?: any): Promise<any> {
-    const key = projectConfig?.openrouter_key || process.env.OPENROUTER_API_KEY;
+    const key = projectConfig?.openrouter_key || import.meta.env.VITE_OPENROUTER_API_KEY;
     if (!key) throw new Error("OpenRouter API key not found. Please configure it in the settings or environment.");
 
     let lastError;

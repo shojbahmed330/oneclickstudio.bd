@@ -9,9 +9,22 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  optimizeDeps: {
+    include: [
+      '@typescript/ata',
+      '@typescript/vfs',
+      'typescript',
+      'lucide-react',
+      'framer-motion',
+      'clsx',
+      'tailwind-merge'
+    ]
+  },
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./"),
+      "@": path.resolve(__dirname, "./src"),
+      "assert": path.resolve(__dirname, "./src/utils/assert-polyfill.ts"),
+      "path": "path-browserify",
     },
   },
   define: {
@@ -24,5 +37,9 @@ export default defineConfig({
   server: {
     port: 3000,
     host: '0.0.0.0',
+    headers: {
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+    }
   }
 })

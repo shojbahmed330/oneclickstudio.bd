@@ -33,26 +33,19 @@ interface AppRouterProps {
   fileInputRef: React.RefObject<HTMLInputElement>;
 }
 
-const getDefaultHtml = (appName: string) => `<div class="w-full h-full flex flex-col items-center justify-center p-8 bg-[#09090b] text-center space-y-8 relative overflow-hidden min-h-screen">
-  <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[200%] h-[200%] bg-[conic-gradient(from_90deg_at_50%_50%,#00000000_50%,#ec4899_100%)] opacity-20 animate-[spin_4s_linear_infinite] blur-3xl"></div>
-  <div class="absolute inset-0 bg-[#09090b]/80 backdrop-blur-sm"></div>
-  <div class="relative z-10 flex flex-col items-center justify-center space-y-6">
-    <div class="relative group">
-      <div class="absolute -inset-4 bg-pink-500/20 blur-xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
-      <div class="w-24 h-24 rounded-3xl border border-white/10 bg-black/50 backdrop-blur-md flex items-center justify-center shadow-2xl relative overflow-hidden">
-        <div class="absolute inset-0 bg-gradient-to-br from-pink-500/20 to-transparent"></div>
-        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-pink-500 relative z-10 animate-pulse"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>
-      </div>
-    </div>
-    <div class="space-y-2">
-      <h2 class="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-pink-200 to-white uppercase tracking-widest animate-pulse">${appName}</h2>
-      <div class="flex items-center justify-center gap-2">
-        <span class="w-2 h-2 rounded-full bg-pink-500 animate-ping"></span>
-        <p class="text-[10px] font-bold text-pink-500/80 uppercase tracking-[0.4em]">Ready to Build</p>
-      </div>
-    </div>
-  </div>
-</div>`;
+const getDefaultHtml = (appName: string) => `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${appName}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>`;
 
 export const AppRouter: React.FC<AppRouterProps> = ({
   path, mode, setMode, user, setUser, showScan, setShowScan, handleLogout,
@@ -136,12 +129,12 @@ export const AppRouter: React.FC<AppRouterProps> = ({
           onLoadProject={(p) => { logic.loadProject(p); navigateTo('/dashboard', AppMode.PREVIEW); }} 
           onSaveCurrent={(n) => db.saveProject(user.id, n, logic.projectFiles, logic.projectConfig)} 
           onCreateNew={(n) => db.saveProject(user.id, n, { 
-            'index.html': getDefaultHtml(n),
-            'src/App.tsx': `import React from 'react';\n\nexport const App = () => {\n  return (\n    <div className="p-4">\n      <h1 className="text-2xl font-bold">Welcome to ${n}</h1>\n    </div>\n  );\n};\n`,
-            'src/main.tsx': `import React from 'react';\nimport ReactDOM from 'react-dom/client';\nimport { App } from './App';\nimport './index.css';\n\nReactDOM.createRoot(document.getElementById('root')!).render(\n  <React.StrictMode>\n    <App />\n  </React.StrictMode>\n);\n`,
-            'src/index.css': `@tailwind base;\n@tailwind components;\n@tailwind utilities;\n`,
-            'src/components/ui/Button.tsx': `import React from 'react';\n\nexport const Button = ({ children, onClick }: { children: React.ReactNode, onClick?: () => void }) => {\n  return (\n    <button onClick={onClick} className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">\n      {children}\n    </button>\n  );\n};\n`,
-            'src/services/api.ts': `export const fetchExample = async () => {\n  return { data: 'example' };\n};\n`
+            'app/index.html': getDefaultHtml(n),
+            'app/src/App.tsx': `import React from 'react';\n\nexport const App = () => {\n  return (\n    <div className="p-4">\n      <h1 className="text-2xl font-bold">Welcome to ${n}</h1>\n    </div>\n  );\n};\n`,
+            'app/src/main.tsx': `import React from 'react';\nimport ReactDOM from 'react-dom/client';\nimport { App } from './App';\nimport './index.css';\n\nReactDOM.createRoot(document.getElementById('root')!).render(\n  <React.StrictMode>\n    <App />\n  </React.StrictMode>\n);\n`,
+            'app/src/index.css': `@tailwind base;\n@tailwind components;\n@tailwind utilities;\n`,
+            'app/src/components/ui/Button.tsx': `import React from 'react';\n\nexport const Button = ({ children, onClick }: { children: React.ReactNode, onClick?: () => void }) => {\n  return (\n    <button onClick={onClick} className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">\n      {children}\n    </button>\n  );\n};\n`,
+            'app/src/services/api.ts': `export const fetchExample = async () => {\n  return { data: 'example' };\n};\n`
           }, { appName: n, packageName: 'com.' + n.toLowerCase() })} 
         />
       ) : (

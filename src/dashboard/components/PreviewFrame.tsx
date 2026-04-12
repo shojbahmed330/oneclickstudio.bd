@@ -61,7 +61,7 @@ const PreviewFrame: React.FC<PreviewFrameProps> = ({ workspace, children, appNam
         )}
 
         {/* CONTENT AREA - Full height on mobile */}
-        <div className="flex-1 w-full bg-[#09090b] relative overflow-hidden">
+        <div className="flex-1 w-full bg-[#09090b] relative overflow-hidden flex flex-col">
            {children}
         </div>
 

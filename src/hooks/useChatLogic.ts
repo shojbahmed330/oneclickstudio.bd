@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { ChatMessage, BuilderPhase, BuilderStatus, WorkspaceType, ProjectConfig, User as UserType } from '../types';
 import { AIController } from '../services/controller';
 import { DatabaseService } from '../services/dbService';
+import { KnowledgeBaseService } from '../services/KnowledgeBaseService';
 
 // Utility to create a unique message ID
 const createMessageId = (): string => {
@@ -64,6 +65,58 @@ export const useChatLogic = (
 ): ChatLogic => {
   const [messages, setMessagesState] = useState<ChatMessage[]>([]);
   const messagesRef = useRef<ChatMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [phase, setPhase] = useState<BuilderPhase>(BuilderPhase.EMPTY);
+  const [builderStatuses, setBuilderStatuses] = useState<BuilderStatus[]>([]);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [currentAction, setCurrentAction] = useState<string | null>(null);
+  const [executionQueue, setExecutionQueue] = useState<string[]>([]);
+  const [lastThought, setLastThought] = useState<string>('');
+  const [currentPlan, setCurrentPlan] = useState<string[]>([]);
+  const [waitingForApproval, setWaitingForApproval] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<{ data: string; mimeType: string; preview: string } | null>(null);
+  const [runtimeError, setRuntimeError] = useState<{ message: string; line: number; source: string } | null>(null);
+  const runtimeErrorRef = useRef<{ message: string; line: number; source: string } | null>(null);
+  const lastPreviewRenderAtRef = useRef(0);
+  const [isRepairing, setIsRepairing] = useState(false);
+  const [repairSuccess, setRepairSuccess] = useState(false);
+
+  // Persistence: Load messages and input from localStorage on mount or project change
+  useEffect(() => {
+    if (!currentProjectId) return;
+    const savedMessages = localStorage.getItem(`chat_messages_${currentProjectId}`);
+    const savedInput = localStorage.getItem(`chat_input_${currentProjectId}`);
+    
+    if (savedMessages) {
+      try {
+        const parsed = JSON.parse(savedMessages);
+        setMessagesState(parsed);
+        messagesRef.current = parsed;
+      } catch (e) {
+        console.error("Failed to parse saved messages:", e);
+      }
+    }
+    
+    if (savedInput) {
+      setInput(savedInput);
+    }
+  }, [currentProjectId]);
+
+  // Persistence: Save messages and input to localStorage on change
+  useEffect(() => {
+    if (!currentProjectId) return;
+    localStorage.setItem(`chat_messages_${currentProjectId}`, JSON.stringify(messages));
+  }, [messages, currentProjectId]);
+
+  useEffect(() => {
+    KnowledgeBaseService.getInstance().loadDynamicKnowledge();
+  }, []);
+
+  useEffect(() => {
+    if (!currentProjectId) return;
+    localStorage.setItem(`chat_input_${currentProjectId}`, input);
+  }, [input, currentProjectId]);
+
   const setMessages = useCallback((msgs: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
     if (typeof msgs === 'function') {
       setMessagesState(prev => {
@@ -76,22 +129,6 @@ export const useChatLogic = (
       messagesRef.current = msgs;
     }
   }, []);
-  const [input, setInput] = useState('');
-  const [phase, setPhase] = useState<BuilderPhase>(BuilderPhase.EMPTY);
-  const [builderStatuses, setBuilderStatuses] = useState<BuilderStatus[]>([]);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [currentAction, setCurrentAction] = useState<string | null>(null);
-  const [executionQueue, setExecutionQueue] = useState<string[]>([]);
-  const [lastThought, setLastThought] = useState<string>('');
-  const [currentPlan, setCurrentPlan] = useState<string[]>([]);
-  const [waitingForApproval, setWaitingForApproval] = useState(false);
-  const [selectedImage, setSelectedImage] = useState<{ data: string; mimeType: string; preview: string } | null>(null);
-  
-  const [runtimeError, setRuntimeError] = useState<{ message: string; line: number; source: string } | null>(null);
-  const runtimeErrorRef = useRef<{ message: string; line: number; source: string } | null>(null);
-  const lastPreviewRenderAtRef = useRef(0);
-  const [isRepairing, setIsRepairing] = useState(false);
-  const [repairSuccess, setRepairSuccess] = useState(false);
   
   const autoStepCountRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -223,17 +260,20 @@ INSTRUCTION: Analyze the test failures above. Fix the logic in the corresponding
     setBuilderStatuses([]);
     abortControllerRef.current = new AbortController();
     
+    const currentMessages = [...messagesRef.current];
+    let userMsg: ChatMessage | null = null;
+
     try {
       if (!isAuto) {
         autoStepCountRef.current = 0;
-        const userMsg: ChatMessage = { 
+        userMsg = { 
           id: createMessageId(), 
           role: 'user', 
           content: promptText, 
           image: selectedImage?.preview, 
           timestamp: Date.now() 
         };
-        setMessages(prev => [...prev, userMsg]);
+        setMessages(prev => [...prev, userMsg!]);
         setInput('');
         setSelectedImage(null);
       }
@@ -253,20 +293,7 @@ INSTRUCTION: Analyze the test failures above. Fix the logic in the corresponding
 
       const currentFiles = { ...projectFilesRef.current };
       
-      // We need the messages for the stream. Since we are in a callback, we should use the latest state.
-      // However, to avoid dependency on 'messages', we can't easily get it here without putting it in deps.
-      // But we can use a ref or just accept the dependency.
-      // Let's use a ref for messages to keep handleSend stable.
-      const messagesSnapshot = [...messagesRef.current];
-      if (!isAuto) {
-        messagesSnapshot.push({ 
-          id: createMessageId(), 
-          role: 'user', 
-          content: promptText, 
-          image: selectedImage?.preview, 
-          timestamp: Date.now() 
-        });
-      }
+      const messagesSnapshot = userMsg ? [...currentMessages, userMsg] : currentMessages;
 
       const allowSupabaseQuestion = shouldAllowSupabaseQuestion(promptText, messagesSnapshot, projectConfig);
       

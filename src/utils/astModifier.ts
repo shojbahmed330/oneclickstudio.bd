@@ -1,21 +1,5 @@
 import jscodeshift from 'jscodeshift';
 
-// Polyfill assert for browser environment to fix "assert.ok is not a function" error
-// jscodeshift and its dependencies (recast, ast-types) expect Node's assert module.
-if (typeof window !== 'undefined') {
-  (window as any).assert = (window as any).assert || {
-    ok: (value: any, message?: string) => {
-      if (!value) throw new Error(message || 'Assertion failed');
-    },
-    equal: (a: any, b: any, message?: string) => {
-      if (a != b) throw new Error(message || `Assertion failed: ${a} != ${b}`);
-    },
-    strictEqual: (a: any, b: any, message?: string) => {
-      if (a !== b) throw new Error(message || `Assertion failed: ${a} !== ${b}`);
-    }
-  };
-}
-
 // Initialize jscodeshift with the TSX parser to support React and TypeScript
 const j = jscodeshift.withParser('tsx');
 

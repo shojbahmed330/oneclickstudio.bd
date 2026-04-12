@@ -5,16 +5,19 @@ import { ErrorParser, ParsedError } from './ErrorParser';
 import { GeminiService } from './geminiService';
 import { LanguageService } from './LanguageService';
 import { Validator } from './Validator';
+import { DatabaseService } from './dbService';
 
 export class SelfHealingService {
   private controller: AIController;
   private geminiService: GeminiService;
   private validator: Validator;
+  private db: DatabaseService;
 
   constructor(controller: AIController, validator: Validator) {
     this.controller = controller;
     this.geminiService = new GeminiService();
     this.validator = validator;
+    this.db = DatabaseService.getInstance();
   }
 
   attemptHeal(files: Record<string, string>, errors: string[]): { healedFiles: Record<string, string>, remainingErrors: string[], detectedMissingTypes: { name: string, context: string }[] } {
@@ -91,17 +94,24 @@ export class SelfHealingService {
     }
 
     // 4. Fix Default Export Mismatches (basic healing)
-    const defaultExportErrors = remainingErrors.filter(e => e.includes('Default import mismatch'));
+    const defaultExportErrors = remainingErrors.filter(e => e.includes('Default import mismatch') || e.includes('has no default export'));
     for (const error of defaultExportErrors) {
-       const match = error.match(/You imported "([^"]+)" as default from "([^"]+)"/);
-       if (match && match[1] && match[2]) {
-         const localName = match[1];
-         const specifier = match[2];
-         // Try to find the file that imports this and change it to a named import
+       let localName: string | null = null;
+       
+       const customMatch = error.match(/You imported "([^"]+)" as default from/);
+       const tsMatch = error.match(/has no default export\. Did you mean to use 'import \{ ([^}]+) \}/);
+
+       if (customMatch && customMatch[1]) {
+         localName = customMatch[1];
+       } else if (tsMatch && tsMatch[1]) {
+         localName = tsMatch[1].trim();
+       }
+
+       if (localName) {
          for (const [path, content] of Object.entries(healedFiles)) {
-            const regex = new RegExp(`import\\s+${localName}\\s+from\\s+['"]${specifier}['"]`);
+            const regex = new RegExp(`import\\s+${localName}\\s+from\\s+['"]([^'"]+)['"]`);
             if (regex.test(content)) {
-              healedFiles[path] = content.replace(regex, `import { ${localName} } from '${specifier}'`);
+              healedFiles[path] = content.replace(regex, `import { ${localName} } from '$1'`);
               madeChanges = true;
               remainingErrors = remainingErrors.filter(e => e !== error);
               console.log(`[Self-Healing] Fixed default import of ${localName} in ${path}`);
@@ -115,8 +125,76 @@ export class SelfHealingService {
     for (const error of missingFileErrors) {
       if (error.includes('"./App"') || error.includes('"./index.css"')) {
         console.log(`[Self-Healing] Critical missing file detected: ${error}`);
-        // We can't easily "create" the file here without knowing the content, 
-        // but we can ensure it stays in remainingErrors to force AI to fix it.
+      }
+    }
+
+    // 6. Fix Missing useEffect Dependency Array
+    const useEffectErrors = remainingErrors.filter(e => e.includes('missing a dependency array'));
+    for (const error of useEffectErrors) {
+      const match = error.match(/in "([^"]+)"/);
+      if (match && match[1]) {
+        const path = match[1];
+        if (healedFiles[path]) {
+          // Simple regex to add [] to useEffect calls that only have one argument
+          // This is a bit risky but can fix the most common case
+          const content = healedFiles[path];
+          const fixedContent = content.replace(/useEffect\s*\(\s*(\(\s*\)\s*=>\s*\{[\s\S]*?\})\s*\)/g, 'useEffect($1, [])');
+          if (content !== fixedContent) {
+            healedFiles[path] = fixedContent;
+            madeChanges = true;
+            remainingErrors = remainingErrors.filter(e => e !== error);
+            console.log(`[Self-Healing] Added missing dependency array to useEffect in ${path}`);
+          }
+        }
+      }
+    }
+
+    // 7. Fix Missing package.json Dependencies
+    const depErrors = remainingErrors.filter(e => e.includes('NOT listed in package.json'));
+    if (depErrors.length > 0 && healedFiles['package.json']) {
+      try {
+        const pkg = JSON.parse(healedFiles['package.json']);
+        pkg.dependencies = pkg.dependencies || {};
+        let pkgChanged = false;
+
+        for (const error of depErrors) {
+          const match = error.match(/You imported "([^"]+)"/);
+          if (match && match[1]) {
+            const packageName = match[1];
+            if (!pkg.dependencies[packageName]) {
+              pkg.dependencies[packageName] = 'latest';
+              pkgChanged = true;
+              remainingErrors = remainingErrors.filter(e => e !== error);
+              console.log(`[Self-Healing] Added ${packageName} to package.json`);
+            }
+          }
+        }
+
+        if (pkgChanged) {
+          healedFiles['package.json'] = JSON.stringify(pkg, null, 2);
+          madeChanges = true;
+        }
+      } catch (e) {
+        console.error("[Self-Healing] Failed to parse package.json for healing:", e);
+      }
+    }
+
+    // 8. Fix Tailwind CDN script in index.html
+    const tailwindCdnErrors = remainingErrors.filter(e => e.includes('You MUST NOT use the Tailwind CDN script'));
+    for (const error of tailwindCdnErrors) {
+      const match = error.match(/in ([^ ]+)/);
+      if (match && match[1]) {
+        const path = match[1];
+        if (healedFiles[path]) {
+          const content = healedFiles[path];
+          const fixedContent = content.replace(/<script\s+src=["']https:\/\/cdn\.tailwindcss\.com["']><\/script>/g, '');
+          if (content !== fixedContent) {
+            healedFiles[path] = fixedContent;
+            madeChanges = true;
+            remainingErrors = remainingErrors.filter(e => e !== error);
+            console.log(`[Self-Healing] Removed Tailwind CDN script from ${path}`);
+          }
+        }
       }
     }
 
@@ -125,7 +203,9 @@ export class SelfHealingService {
 
   public async runTypeHealingLoop(
     files: Record<string, string>, 
-    initialErrors: string[]
+    initialErrors: string[],
+    modelName: string = 'gemini-3-pro-preview',
+    projectConfig?: any
   ): Promise<{ healedFiles: Record<string, string>, remainingErrors: string[] }> {
     let currentFiles = { ...files };
     let currentErrors = [...initialErrors];
@@ -160,7 +240,7 @@ export class SelfHealingService {
       try {
         const definitions = await this.geminiService.generateTypeDefinitions(
           detectedMissingTypes, 
-          'gemini-3-pro-preview', 
+          modelName, 
           previousGeneratedTypes
         );
 
@@ -171,7 +251,12 @@ export class SelfHealingService {
           
           // Re-validate to see if errors are fixed and no conflicts introduced
           console.log(` [Self-Healing] Re-compiling to verify fixes and check for conflicts...`);
-          const proposedErrors = this.validator.validateTypeScriptSyntax(proposedFiles);
+          
+          // We MUST use LanguageService to get Semantic (Type) Diagnostics, not just Syntax
+          const langService = LanguageService.getInstance();
+          await langService.updateVFS(proposedFiles);
+          const tsFiles = Object.keys(proposedFiles).filter(f => f.endsWith('.ts') || f.endsWith('.tsx'));
+          const proposedErrors = await langService.validateFiles(tsFiles);
           
           // Check if the specific errors are gone
           const newParsedErrors = ErrorParser.analyzeBatch(proposedErrors);
@@ -288,7 +373,9 @@ export class SelfHealingService {
     originalErrors: string[],
     fixedFiles: Record<string, string>,
     previousFiles: Record<string, string>,
-    knowledgeBase: any[]
+    knowledgeBase: any[],
+    modelName: string = 'gemini-3-pro-preview',
+    projectConfig?: any
   ): Promise<any | null> {
     const unknownErrors = originalErrors.filter(error => {
       const found = knowledgeBase.some(k => {
@@ -337,7 +424,8 @@ export class SelfHealingService {
         {},
         [],
         false,
-        'gemini-3-pro-preview'
+        modelName,
+        projectConfig
       );
       
       let finalAnswer = "";
@@ -348,8 +436,18 @@ export class SelfHealingService {
       }
       
       if (finalAnswer) {
-        // In a real system, we would append this to the file or a database.
-        // For now, we log it as a "Learned Lesson".
+        try {
+          // Parse the JSON from the AI response
+          const jsonMatch = finalAnswer.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const entry = JSON.parse(jsonMatch[0]);
+            await this.db.saveLearnedError(entry);
+            console.log(" [Learning Loop] New Error Pattern Saved to DB:", entry.id);
+          }
+        } catch (e) {
+          console.error(" [Learning Loop] Failed to parse or save learned error:", e);
+        }
+        
         console.log(" [Learning Loop] New Error Pattern Learned:", finalAnswer);
         return finalAnswer;
       }

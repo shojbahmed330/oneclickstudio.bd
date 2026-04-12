@@ -38,10 +38,31 @@ export class ErrorAnalyzer {
 export const ERROR_KNOWLEDGE_BASE: ErrorKnowledgeEntry[] = [
   {
     id: 'missing_import_target',
-    pattern: /Missing import target: "([^"]+)" in "([^"]+)"/,
+    pattern: /🚨 CRITICAL ERROR: Missing import target "([^"]+)" in file "([^"]+)"/,
     category: 'import',
     rootCause: 'আপনি "$1" ফাইলটি ইমপোর্ট করার চেষ্টা করেছেন যা "$2" ফাইলের সাপেক্ষে খুঁজে পাওয়া যাচ্ছে না।',
     solutionInstruction: 'দয়া করে নিশ্চিত করুন যে "$1" ফাইলটি সঠিক পাথে আছে। যদি ফাইলটি না থাকে, তবে সেটি তৈরি করুন অথবা ইমপোর্ট পাথটি ঠিক করুন।'
+  },
+  {
+    id: 'useeffect_missing_dependency',
+    pattern: /🚨 CRITICAL ERROR: `useEffect` in "([^"]+)" is missing a dependency array/,
+    category: 'runtime',
+    rootCause: 'আপনি "$1" ফাইলে `useEffect` ব্যবহার করেছেন কিন্তু কোনো ডিপেন্ডেন্সি অ্যারে (dependency array) দেননি।',
+    solutionInstruction: 'এটি ইনফিনিট লুপ তৈরি করে ব্রাউজার ক্র্যাশ করতে পারে। দয়া করে একটি ডিপেন্ডেন্সি অ্যারে যুক্ত করুন (যেমন: `useEffect(() => { ... }, [])`)।'
+  },
+  {
+    id: 'router_wrapping_missing',
+    pattern: /🚨 CRITICAL ERROR: You are using "react-router-dom" \(e.g., useNavigate, <Link>, <Routes>\), but your app is NOT wrapped in a router/,
+    category: 'runtime',
+    rootCause: 'আপনি রাউটিং ফিচার ব্যবহার করছেন কিন্তু অ্যাপটিকে কোনো রাউটার (Router) দিয়ে র‍্যাপ (wrap) করেননি।',
+    solutionInstruction: 'আপনার মেইন কম্পোনেন্টকে (src/main.tsx বা src/App.tsx-এ) `<MemoryRouter>` বা `<HashRouter>` দিয়ে র‍্যাপ করুন। প্রিভিউ এনভায়রনমেন্টে `BrowserRouter` ব্যবহার করবেন না।'
+  },
+  {
+    id: 'library_not_in_package_json',
+    pattern: /🚨 CRITICAL ERROR: You imported "([^"]+)" in "([^"]+)", but it is NOT listed in package.json/,
+    category: 'config',
+    rootCause: 'আপনি "$1" লাইব্রেরিটি "$2" ফাইলে ইমপোর্ট করেছেন, কিন্তু এটি package.json-এ ডিপেন্ডেন্সি হিসেবে যুক্ত করা নেই।',
+    solutionInstruction: 'package.json ফাইলের "dependencies" সেকশনে "$1" লাইব্রেরিটি ভার্সনসহ যুক্ত করুন।'
   },
   {
     id: 'jsx_in_ts_extension',

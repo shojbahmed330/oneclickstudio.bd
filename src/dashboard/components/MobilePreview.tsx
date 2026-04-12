@@ -5,8 +5,8 @@ import { AppMode, ProjectConfig, WorkspaceType } from '../../types';
 import { useLanguage } from '../../i18n/LanguageContext';
 import WorkspaceToggle from './WorkspaceToggle';
 import PreviewFrame from './PreviewFrame';
-import { SandpackProvider, SandpackPreview } from "@codesandbox/sandpack-react";
 import { extractDependencies } from '../../utils/dependencyScanner';
+import { WebContainerService } from '../../services/WebContainerService';
 
 interface MobilePreviewProps {
   projectFiles: Record<string, string>;
@@ -29,22 +29,14 @@ const MobilePreview: React.FC<MobilePreviewProps> = ({
   runtimeError, onAutoFix
 }) => {
   const [showSplash, setShowSplash] = useState(false);
-  const [showQrModal, setShowQrModal] = useState(false);
-  const qrRef = useRef<HTMLDivElement>(null);
-  const [renderVersion, setRenderVersion] = useState(0);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isBooting, setIsBooting] = useState(false);
   const { t } = useLanguage();
   
   const fileCount = Object.keys(projectFiles).length;
   const hasFiles = fileCount > 0;
   const isInitialLoad = fileCount === 0; 
-
-  const previewUrl = projectId ? `${window.location.origin}/preview/${projectId}?workspace=${workspace}` : null;
-
-  useEffect(() => {
-    if (!isGenerating && hasFiles) {
-      setRenderVersion(v => v + 1);
-    }
-  }, [isGenerating, hasFiles, projectFiles]);
+  const hasMounted = useRef(false);
 
   useEffect(() => {
     if (hasFiles && !isGenerating) {
@@ -56,31 +48,66 @@ const MobilePreview: React.FC<MobilePreviewProps> = ({
     }
   }, [hasFiles, isGenerating, workspace]);
 
-  // Format files for Sandpack (ensure leading slash and inject .env)
-  const sandpackFiles = useMemo(() => {
-    const files: Record<string, string> = {};
+  useEffect(() => {
+    if (!window.crossOriginIsolated) return;
+    if (!hasFiles || isGenerating) return;
+
+    const formattedFiles: Record<string, string> = {};
+    const prefix = `${workspace}/`;
+    
     for (const [path, content] of Object.entries(projectFiles)) {
-      const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-      files[normalizedPath] = content;
+      let normalizedPath = path;
+      if (path.startsWith(prefix)) {
+        normalizedPath = path.slice(prefix.length);
+      } else if (path.includes('/') && (path.startsWith('app/') || path.startsWith('admin/'))) {
+        continue;
+      }
+      formattedFiles[normalizedPath] = content;
     }
 
-    // Inject .env file
-    let envContent = '';
-    if (projectConfig?.supabase_url) {
-      envContent += `VITE_SUPABASE_URL=${projectConfig.supabase_url}\n`;
-    }
-    if (projectConfig?.supabase_key) {
-      envContent += `VITE_SUPABASE_ANON_KEY=${projectConfig.supabase_key}\n`;
-    }
-    if (envContent) {
-      files['/.env'] = envContent;
+    if (!formattedFiles['package.json']) {
+      formattedFiles['package.json'] = JSON.stringify({
+        name: "preview-app",
+        type: "module",
+        scripts: { dev: "vite" },
+        dependencies: { react: "^18.2.0", "react-dom": "^18.2.0" },
+        devDependencies: { vite: "^5.0.0", "@vitejs/plugin-react": "^4.2.0" }
+      }, null, 2);
     }
 
-    return files;
-  }, [projectFiles, projectConfig]);
+    if (!formattedFiles['vite.config.ts'] && !formattedFiles['vite.config.js']) {
+      formattedFiles['vite.config.ts'] = `import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\nexport default defineConfig({ plugins: [react()] });`;
+    }
 
-  // Extract dynamic dependencies from project files
-  const dynamicDependencies = useMemo(() => extractDependencies(projectFiles), [projectFiles]);
+    if (hasMounted.current) {
+      Object.entries(formattedFiles).forEach(([path, content]) => {
+        WebContainerService.updateFile(path, content);
+      });
+      return;
+    }
+    hasMounted.current = true;
+
+    const initWebContainer = async () => {
+      try {
+        setIsBooting(true);
+        await WebContainerService.mountFiles(formattedFiles);
+
+        WebContainerService.onUrlChange((url) => {
+          setPreviewUrl(url);
+          setIsBooting(false);
+        });
+
+        await WebContainerService.runCommand('npm', ['install']);
+        await WebContainerService.runCommand('npm', ['run', 'dev']);
+
+      } catch (error) {
+        console.error("WebContainer Error:", error);
+        setIsBooting(false);
+      }
+    };
+
+    initWebContainer();
+  }, [projectFiles, workspace, isGenerating, hasFiles]);
 
   return (
     <section className={`flex-1 flex flex-col items-center ${workspace === 'admin' ? 'lg:items-stretch lg:px-6' : 'lg:items-start lg:pl-40'} lg:justify-center relative h-full transition-all duration-1000 ${mobileTab === 'chat' ? 'hidden lg:flex' : 'flex'}`}>
@@ -95,23 +122,41 @@ const MobilePreview: React.FC<MobilePreviewProps> = ({
              <div className={`absolute -inset-4 blur-[40px] opacity-0 group-hover/preview-container:opacity-20 transition-opacity duration-700 rounded-[4rem] -z-10 ${workspace === 'admin' ? 'bg-indigo-500' : 'bg-pink-500'}`}></div>
              
              <PreviewFrame workspace={workspace} appName={projectConfig?.appName}>
-               <div className="w-full h-full bg-[#09090b] relative flex flex-col items-center justify-center overflow-hidden">
+               <div className="w-full h-full bg-[#09090b] relative overflow-hidden">
                  {hasFiles ? (
-                   <div className="w-full h-full relative">
-                     <SandpackProvider 
-                       key={`${renderVersion}-${repairSuccess}`}
-                       template="vite-react-ts" 
-                       files={sandpackFiles}
-                       customSetup={{
-                         dependencies: dynamicDependencies,
-                       }}
-                     >
-                       <SandpackPreview 
-                         showOpenInCodeSandbox={false} 
-                         showRefreshButton={false} 
-                         style={{ width: '100%', height: '100%', border: 'none', background: '#09090b' }} 
-                       />
-                     </SandpackProvider>
+                   <div className="w-full h-full relative flex flex-col">
+                     {!window.crossOriginIsolated ? (
+                       <div className="absolute inset-0 bg-[#09090b] z-20 flex flex-col items-center justify-center p-6 text-center">
+                         <AlertCircle size={32} className="text-pink-500 mb-4" />
+                         <h3 className="text-sm font-black text-white uppercase mb-2">New Tab Required</h3>
+                         <p className="text-zinc-500 text-[10px] mb-4">
+                             WebContainers cannot run inside iframes without proper headers.
+                         </p>
+                         <p className="text-pink-500 font-bold uppercase tracking-widest text-[8px]">
+                             Open in a new tab to view preview.
+                         </p>
+                       </div>
+                     ) : (
+                       <>
+                         {isBooting && !previewUrl ? (
+                           <div className="absolute inset-0 flex items-center justify-center bg-[#09090b] z-10">
+                             <div className="text-center space-y-4">
+                               <div className="w-8 h-8 border-2 border-pink-500/20 border-t-pink-500 rounded-full animate-spin mx-auto"></div>
+                               <p className="text-zinc-500 font-mono text-[10px] uppercase tracking-widest">Booting Node.js...</p>
+                             </div>
+                           </div>
+                         ) : null}
+
+                         {previewUrl && (
+                           <iframe 
+                             src={previewUrl} 
+                             className="w-full h-full border-none bg-white"
+                             title="WebContainer Preview"
+                             allow="cross-origin-isolated"
+                           />
+                         )}
+                       </>
+                     )}
                      
                      {isGenerating && !isInitialLoad && (
                        <div className="absolute top-4 right-4 z-[250] flex items-center gap-2 px-3 py-1.5 bg-black/60 backdrop-blur-md border border-pink-500/30 rounded-full animate-in fade-in slide-in-from-top-2">

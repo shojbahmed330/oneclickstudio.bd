@@ -108,9 +108,22 @@ export class DiffEngine {
       if (typeof incomingContent !== 'string') {
         incomingContent = JSON.stringify(incomingContent, null, 2);
       }
+
+      // Path Redirection: If the AI omits a common root directory (like app/), redirect it to the existing file.
+      let targetPath = path;
+      if (!base[path]) {
+        const commonDirs = ['app/', 'admin/', 'tests/', 'public/'];
+        for (const dir of commonDirs) {
+          if (base[dir + path]) {
+            targetPath = dir + path;
+            Logger.info(`Redirecting update from "${path}" to "${targetPath}"`, { component: 'DiffEngine' });
+            break;
+          }
+        }
+      }
       
       // Handle database migrations separately
-      if (path === 'database.sql' && base[path]) {
+      if (targetPath === 'database.sql' && base[targetPath]) {
         const timestamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
         const migrationPath = `migrations/${timestamp}_auto_migration.sql`;
         result[migrationPath] = this.normalize(incomingContent);
@@ -118,14 +131,14 @@ export class DiffEngine {
       }
 
       // If file doesn't exist, create it
-      if (!base[path]) {
-        result[path] = this.normalize(incomingContent);
+      if (!base[targetPath]) {
+        result[targetPath] = this.normalize(incomingContent);
         continue;
       }
 
       // If file exists, try to apply patch
       try {
-        const baseContent = this.normalize(base[path]);
+        const baseContent = this.normalize(base[targetPath]);
         let trimmed = incomingContent.trim();
         let isUnifiedDiff = trimmed.startsWith('--- ') || trimmed.includes('@@ ');
 
