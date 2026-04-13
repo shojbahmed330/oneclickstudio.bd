@@ -140,7 +140,7 @@ export class AIController {
 
     // 3. Orchestration Loop
     let attempts = 0;
-    const maxAttempts = 20; // Effectively unlimited retries until accurate code is generated
+    const maxAttempts = 7; // Reduced from 20 to prevent retry storms and improve responsiveness
     let finalResult: GenerationResult | null = null;
     let failedPatchFiles = new Set<string>();
 
@@ -231,8 +231,8 @@ export class AIController {
           return { merged, normalizedPhaseFiles };
         };
 
-        const isPatchMode = false; // Disabled: Always use full files for reliability
-        let patchInstruction = "\nFULL FILE MODE:\nAlways return the COMPLETE file content for any file you create or modify.\nDO NOT use patches, diffs, or partial snippets.\nDO NOT start the file with '--- filename' or any diff headers. Just return the raw code.\n";
+        const isPatchMode = true; // Enabled for faster generation of small steps
+        let patchInstruction = "\nPATCH MODE ENABLED:\nFor small changes to existing files, return a unified diff patch starting with '--- filename' and '+++ filename' followed by the '@@ ... @@' hunks.\nFor new files or large rewrites, return the full file content.\n";
 
         const strictEditBoundaryInstruction = activeMode === GenerationMode.SCAFFOLD
           ? ""
@@ -635,19 +635,22 @@ export class AIController {
         yield { type: 'status', phase: 'REVIEW', message: "✅ Diagnostics Clean (Zero Errors). Preparing Preview Release..." };
 
         // 6. Project Consistency Fixer (Final Polish)
-        const consistencyModel = this.getPhaseModel('consistency');
-        Logger.info(`Executing CONSISTENCY phase with model: ${consistencyModel}`, { ...logContext, modelName: consistencyModel });
-        yield { type: 'status', phase: 'FIXING', message: `🧠 Running Project Consistency Fixer... (${consistencyModel})` };
-        const consistencyInput = `USER REQUEST: ${currentPrompt}\n\nCURRENT PROJECT STATE:\n${this.orchestrator.buildContext(mergedFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}\n\nINSTRUCTION: Perform a final consistency check. Fix missing files, broken imports, router wrapping, and type definitions.`;
-        
-        const consistencyResult = await this.orchestrator.executePhaseWithCache('consistency', consistencyInput, consistencyModel, this.stateManager.phaseCache, true, projectConfig);
-        
-        if (consistencyResult.files && Object.keys(consistencyResult.files).length > 0) {
-          yield { type: 'status', phase: 'FIXING', message: `Consistency Fixer applied ${Object.keys(consistencyResult.files).length} fixes.` };
-          allGeneratedFiles = { ...allGeneratedFiles, ...consistencyResult.files };
-          const finalApply = applyToContext({ ...mergedFiles }, consistencyResult.files, []);
-          currentContextFiles = finalApply.merged;
-          this.dependencyManager.updateDependencyGraph(currentContextFiles);
+        // Only run during initial scaffolding to save time and API credits during edits/fixes
+        if (mode === GenerationMode.SCAFFOLD) {
+          const consistencyModel = this.getPhaseModel('consistency');
+          Logger.info(`Executing CONSISTENCY phase with model: ${consistencyModel}`, { ...logContext, modelName: consistencyModel });
+          yield { type: 'status', phase: 'FIXING', message: `🧠 Running Project Consistency Fixer... (${consistencyModel})` };
+          const consistencyInput = `USER REQUEST: ${currentPrompt}\n\nCURRENT PROJECT STATE:\n${this.orchestrator.buildContext(mergedFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}\n\nINSTRUCTION: Perform a final consistency check. Fix missing files, broken imports, router wrapping, and type definitions.`;
+          
+          const consistencyResult = await this.orchestrator.executePhaseWithCache('consistency', consistencyInput, consistencyModel, this.stateManager.phaseCache, true, projectConfig);
+          
+          if (consistencyResult.files && Object.keys(consistencyResult.files).length > 0) {
+            yield { type: 'status', phase: 'FIXING', message: `Consistency Fixer applied ${Object.keys(consistencyResult.files).length} fixes.` };
+            allGeneratedFiles = { ...allGeneratedFiles, ...consistencyResult.files };
+            const finalApply = applyToContext({ ...mergedFiles }, consistencyResult.files, []);
+            currentContextFiles = finalApply.merged;
+            this.dependencyManager.updateDependencyGraph(currentContextFiles);
+          }
         }
 
         // 7. Success: Finalize Result

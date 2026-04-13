@@ -228,11 +228,12 @@ export const DESIGN_SYSTEM = `### 🎨 DESIGN SYSTEM & RECIPES (MANDATORY):
 5. **TYPOGRAPHY:** Inter font. Headings: semibold, tracking-tight. Body: normal, leading-relaxed.
 6. **ACCESSIBILITY (CRITICAL):** For any input fields, text areas, or form elements, there MUST be high contrast between the background color and text color (e.g., dark text on a light background, or white text on a dark background). Never use similar colors for input backgrounds and text.`;
 
-export const PATCH_MODE_RULE = `### 🔧 EDITING EXISTING FILES (AST vs FULL FILE):
-If the file already exists in the PROJECT MAP, you have two options:
+export const PATCH_MODE_RULE = `### 🔧 EDITING EXISTING FILES (AST vs PATCH vs FULL FILE):
+If the file already exists in the PROJECT MAP, you have three options:
 1. **AST EDITS (PREFERRED):** For targeted changes like adding a prop to a component, changing a variable value, or adding a class, use the "ast_edits" array in the JSON response. This is structural and 100% safe.
    Supported actions: "add_jsx_attribute", "update_variable".
-2. **FULL FILE:** If the changes are too complex for AST edits (e.g., rewriting a whole component, adding new functions), return the FULL file content in the "files" object. DO NOT use patches or diffs.
+2. **PATCH MODE (FASTER):** For small to medium changes, return a unified diff patch in the "files" object. The patch MUST start with '--- filename' and '+++ filename' followed by standard '@@ ... @@' hunks. This is much faster than returning the full file.
+3. **FULL FILE:** If the changes are too complex for AST edits or patches (e.g., rewriting a whole component, adding new functions), return the FULL file content in the "files" object.
 
 If creating a NEW file:
 - Return full file normally in the "files" object.`;

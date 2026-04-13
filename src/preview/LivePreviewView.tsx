@@ -154,24 +154,6 @@ const LivePreviewView: React.FC<LivePreviewViewProps> = ({
             allow="cross-origin-isolated"
           />
         )}
-
-        {!window.crossOriginIsolated && (
-          <div className="absolute top-4 left-4 right-4 z-20">
-            <div className="glass-tech p-3 rounded-lg flex items-center gap-3 border-pink-500/30 bg-pink-500/10">
-              <AlertCircle size={18} className="text-pink-500 shrink-0" />
-              <div className="flex-1">
-                <p className="text-[10px] font-black text-pink-500 uppercase tracking-widest">Compatibility Mode</p>
-                <p className="text-[10px] text-zinc-400">Node.js features disabled. Open in New Tab for full power.</p>
-              </div>
-              <button 
-                onClick={() => window.open(window.location.href, '_blank')}
-                className="px-3 py-1 bg-pink-500 text-white text-[10px] font-bold rounded-full uppercase"
-              >
-                New Tab
-              </button>
-            </div>
-          </div>
-        )}
       </div>
       
       {/* Terminal View - Only show if isolated */}

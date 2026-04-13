@@ -5,10 +5,8 @@ import { BrowserRouter } from 'react-router-dom';
 import { App } from './App';
 import { PreviewService } from './services/PreviewService';
 
-// Initialize Preview Service Worker (only in development)
-if (import.meta.env.DEV) {
-  PreviewService.init();
-}
+// Initialize Preview Service Worker
+PreviewService.init();
 
 const renderApp = () => {
   const rootElement = document.getElementById('root');

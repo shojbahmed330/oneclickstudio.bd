@@ -19,6 +19,7 @@ self.addEventListener('message', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+  const requestClone = event.request.clone();
   
   // 1. Intercept requests for our virtual preview domain
   if (url.origin === PREVIEW_ORIGIN || url.pathname.startsWith('/__preview/')) {
@@ -49,8 +50,8 @@ self.addEventListener('fetch', (event) => {
         });
       })
       .catch(e => {
-        // Fallback for failed fetches
-        return fetch(event.request);
+        // Fallback for failed fetches - use the clone
+        return fetch(requestClone);
       })
   );
 });
