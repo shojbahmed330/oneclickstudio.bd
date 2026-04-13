@@ -149,8 +149,8 @@ ${RESPONSE_FORMAT}`;
   }
 
   private async callPhaseWithOpenRouter(model: string, system: string, prompt: string, retries: number, projectConfig?: any): Promise<any> {
-    const key = projectConfig?.openrouter_key || import.meta.env.VITE_OPENROUTER_API_KEY;
-    if (!key) throw new Error("OpenRouter API key not found. Please configure it in the settings or environment.");
+    const key = projectConfig?.openrouter_key || import.meta.env.VITE_OPENROUTER_API_KEY || import.meta.env.VITE_API_KEY;
+    if (!key || key === "undefined") throw new Error("OpenRouter API key not found. Please configure it in the settings or environment.");
 
     let lastError;
     for (let attempt = 1; attempt <= retries; attempt++) {

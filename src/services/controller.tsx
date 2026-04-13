@@ -243,10 +243,12 @@ export class AIController {
 
         // Phase 1: Planning
         if (phases.includes("planning")) {
-          yield { type: 'status', phase: 'PLANNING', message: "Planning architecture..." };
+          const planningModel = this.getPhaseModel('planning');
+          Logger.info(`Executing PLANNING phase with model: ${planningModel}`, { ...logContext, modelName: planningModel });
+          yield { type: 'status', phase: 'PLANNING', message: `Planning architecture... (${planningModel})` };
           const planningPrompt = currentPrompt + strictEditBoundaryInstruction;
           const input = this.orchestrator.buildPhaseInput('planning', planningPrompt, currentContextFiles, this.dependencyManager.getGraph(), activeWorkspace, projectConfig);
-          const plan = await this.orchestrator.executePhaseWithCache('planning', input, this.getPhaseModel('planning'), this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
+          const plan = await this.orchestrator.executePhaseWithCache('planning', input, planningModel, this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
           thoughts.push(`[PLAN]: ${plan.thought || 'Planned architecture.'}`);
           finalPlan = plan.plan || [];
           finalPlan = this.sortPlanByDependency(finalPlan);
@@ -373,11 +375,13 @@ export class AIController {
                   break;
                 }
               } else {
-                yield { type: 'status', phase: 'CODING', message: `Implementing: ${stepTitle}` };
+                const codingModel = this.getPhaseModel('coding');
+                Logger.info(`Executing CODING phase for step: ${stepTitle} with model: ${codingModel}`, { ...logContext, modelName: codingModel });
+                yield { type: 'status', phase: 'CODING', message: `Implementing: ${stepTitle} (${codingModel})` };
                 
                 const stepInput = `CURRENT MAIN PLAN TO IMPLEMENT:\n${JSON.stringify(step)}\n\nOVERALL PLAN:\n${JSON.stringify(finalPlan)}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}\n\nINSTRUCTION: Read the 'subPlans' of the CURRENT MAIN PLAN and implement all of them. Output the files modified or created. Do NOT implement steps from other main plans yet. Focus ONLY on the current main plan's sub-plans.`;
                 
-                const code = await this.orchestrator.executePhaseWithCache('coding', stepInput, this.getPhaseModel('coding'), this.stateManager.phaseCache, false, projectConfig);
+                const code = await this.orchestrator.executePhaseWithCache('coding', stepInput, codingModel, this.stateManager.phaseCache, false, projectConfig);
                 
                 if (code.files) {
                   stepFiles = { ...stepFiles, ...code.files };
@@ -454,11 +458,15 @@ export class AIController {
             yield { type: 'plan_progress', activePlanIndex: -1, completedPlanIndices: completedIndices };
             thoughts.push(`[CODE]: Implemented all plan steps with transactional validation and rollback support.`);
           } else {
+            const codingModel = this.getPhaseModel('coding');
+            Logger.info(`Executing CODING phase (direct) with model: ${codingModel}`, { ...logContext, modelName: codingModel });
+            yield { type: 'status', phase: 'CODING', message: `Generating code... (${codingModel})` };
+            
             const codingPrompt = currentPrompt + strictEditBoundaryInstruction;
             const input = (finalPlan && finalPlan.length > 0)
               ? `PLAN:\n${JSON.stringify(finalPlan)}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`
               : `USER REQUEST:\n${codingPrompt}${patchInstruction}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
-            const code = await this.orchestrator.executePhaseWithCache('coding', input, this.getPhaseModel('coding'), this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
+            const code = await this.orchestrator.executePhaseWithCache('coding', input, codingModel, this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
             thoughts.push(`[CODE]: ${code.thought || 'Implemented code.'}`);
             if (code.answer) finalAnswer = code.answer;
             const { merged } = applyToContext(currentContextFiles, code.files || {}, code.ast_edits);
@@ -470,13 +478,15 @@ export class AIController {
 
         // Phase 3: Review
         if (phases.includes("review")) {
-          yield { type: 'status', phase: 'REVIEW', message: "Reviewing implementation..." };
+          const reviewModel = this.getPhaseModel('review');
+          Logger.info(`Executing REVIEW phase with model: ${reviewModel}`, { ...logContext, modelName: reviewModel });
+          yield { type: 'status', phase: 'REVIEW', message: `Reviewing implementation... (${reviewModel})` };
           const reviewPrompt = currentPrompt + strictEditBoundaryInstruction;
           
           // CRITICAL: Always include the files generated in this attempt for review
           const input = `GENERATED FILES IN THIS ATTEMPT:\n${JSON.stringify(generatedFilesThisAttempt, null, 2)}\n\n${patchInstruction}\n\nUSER REQUEST:\n${reviewPrompt}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
           
-          const review = await this.orchestrator.executePhaseWithCache('review', input, this.getPhaseModel('review'), this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
+          const review = await this.orchestrator.executePhaseWithCache('review', input, reviewModel, this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
           thoughts.push(`[REVIEW]: ${review.thought || 'Reviewed code.'}`);
           if (activeMode === GenerationMode.FIX && review.answer) finalAnswer = review.answer;
           const reviewResult = applyToContext(currentContextFiles, review.files || {}, review.ast_edits);
@@ -487,9 +497,11 @@ export class AIController {
 
         // Phase 4: Security
         if (phases.includes("security")) {
-          yield { type: 'status', phase: 'SECURITY', message: "Security audit..." };
+          const securityModel = this.getPhaseModel('security');
+          Logger.info(`Executing SECURITY phase with model: ${securityModel}`, { ...logContext, modelName: securityModel });
+          yield { type: 'status', phase: 'SECURITY', message: `Security audit... (${securityModel})` };
           const input = `FILES TO AUDIT:\n${JSON.stringify(generatedFilesThisAttempt, null, 2)}\n\n${patchInstruction}\n\nUSER REQUEST:\n${currentPrompt}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
-          const security = await this.orchestrator.executePhaseWithCache('security', input, this.getPhaseModel('security'), this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
+          const security = await this.orchestrator.executePhaseWithCache('security', input, securityModel, this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
           thoughts.push(`[SECURITY]: ${security.thought || 'Security audit complete.'}`);
           if (activeMode === GenerationMode.OPTIMIZE && security.answer) finalAnswer = security.answer;
           const securityResult = applyToContext(currentContextFiles, security.files || {}, security.ast_edits);
@@ -500,9 +512,11 @@ export class AIController {
 
         // Phase 5: Performance
         if (phases.includes("performance")) {
-          yield { type: 'status', phase: 'PERFORMANCE', message: "Performance audit..." };
+          const perfModel = this.getPhaseModel('performance');
+          Logger.info(`Executing PERFORMANCE phase with model: ${perfModel}`, { ...logContext, modelName: perfModel });
+          yield { type: 'status', phase: 'PERFORMANCE', message: `Performance audit... (${perfModel})` };
           const input = `FILES TO AUDIT:\n${JSON.stringify(generatedFilesThisAttempt, null, 2)}\n\n${patchInstruction}\n\nUSER REQUEST:\n${currentPrompt}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
-          const perf = await this.orchestrator.executePhaseWithCache('performance', input, this.getPhaseModel('performance'), this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
+          const perf = await this.orchestrator.executePhaseWithCache('performance', input, perfModel, this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
           thoughts.push(`[PERF]: ${perf.thought || 'Performance audit complete.'}`);
           const perfResult = applyToContext(currentContextFiles, perf.files || {}, perf.ast_edits);
           currentContextFiles = perfResult.merged;
@@ -512,9 +526,11 @@ export class AIController {
 
         // Phase 6: UI/UX
         if (phases.includes("uiux")) {
-          yield { type: 'status', phase: 'UIUX', message: "UI/UX polish..." };
+          const uiuxModel = this.getPhaseModel('uiux');
+          Logger.info(`Executing UIUX phase with model: ${uiuxModel}`, { ...logContext, modelName: uiuxModel });
+          yield { type: 'status', phase: 'UIUX', message: `UI/UX polish... (${uiuxModel})` };
           const input = `FILES TO POLISH:\n${JSON.stringify(generatedFilesThisAttempt, null, 2)}\n\n${patchInstruction}\n\nUSER REQUEST:\n${currentPrompt}\n\nCONTEXT:\n${this.orchestrator.buildContext(currentContextFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}`;
-          const uiux = await this.orchestrator.executePhaseWithCache('uiux', input, this.getPhaseModel('uiux'), this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
+          const uiux = await this.orchestrator.executePhaseWithCache('uiux', input, uiuxModel, this.stateManager.phaseCache, activeMode === GenerationMode.FIX, projectConfig);
           thoughts.push(`[UIUX]: ${uiux.thought || 'UI/UX polish complete.'}`);
           if (activeMode === GenerationMode.OPTIMIZE && uiux.answer) finalAnswer = uiux.answer;
           const uiuxResult = applyToContext(currentContextFiles, uiux.files || {}, uiux.ast_edits);
@@ -619,10 +635,12 @@ export class AIController {
         yield { type: 'status', phase: 'REVIEW', message: "✅ Diagnostics Clean (Zero Errors). Preparing Preview Release..." };
 
         // 6. Project Consistency Fixer (Final Polish)
-        yield { type: 'status', phase: 'FIXING', message: "🧠 Running Project Consistency Fixer..." };
+        const consistencyModel = this.getPhaseModel('consistency');
+        Logger.info(`Executing CONSISTENCY phase with model: ${consistencyModel}`, { ...logContext, modelName: consistencyModel });
+        yield { type: 'status', phase: 'FIXING', message: `🧠 Running Project Consistency Fixer... (${consistencyModel})` };
         const consistencyInput = `USER REQUEST: ${currentPrompt}\n\nCURRENT PROJECT STATE:\n${this.orchestrator.buildContext(mergedFiles, this.dependencyManager.getGraph(), currentPrompt, projectConfig)}\n\nINSTRUCTION: Perform a final consistency check. Fix missing files, broken imports, router wrapping, and type definitions.`;
         
-        const consistencyResult = await this.orchestrator.executePhaseWithCache('consistency', consistencyInput, this.getPhaseModel('consistency'), this.stateManager.phaseCache, true, projectConfig);
+        const consistencyResult = await this.orchestrator.executePhaseWithCache('consistency', consistencyInput, consistencyModel, this.stateManager.phaseCache, true, projectConfig);
         
         if (consistencyResult.files && Object.keys(consistencyResult.files).length > 0) {
           yield { type: 'status', phase: 'FIXING', message: `Consistency Fixer applied ${Object.keys(consistencyResult.files).length} fixes.` };
