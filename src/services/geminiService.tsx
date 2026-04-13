@@ -120,7 +120,7 @@ ${RESPONSE_FORMAT}`;
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
         return parseModelJson(text || '{}');
       } catch (error: any) {
-        Logger.warn(`Attempt ${attempt} failed with Gemini Proxy`, { component: 'GeminiService', model, attempt }, error);
+        Logger.warn(`Attempt ${attempt} failed with Gemini API`, { component: 'GeminiService', model, attempt }, error);
         lastError = error;
         
         // If it's a fetch error (Failed to fetch), retry immediately or with small delay
@@ -132,7 +132,7 @@ ${RESPONSE_FORMAT}`;
         throw error;
       }
     }
-    throw new Error(`Gemini Proxy failed after ${retries} attempts: ${lastError?.message}`);
+    throw new Error(`Gemini API failed after ${retries} attempts: ${lastError?.message}`);
   }
 
   async generateTypeDefinitions(missingTypes: { name: string, context: string }[], modelName: string = 'gemini-3-pro-preview', previousFailures?: string, projectConfig?: any): Promise<string> {
@@ -183,14 +183,14 @@ ${RESPONSE_FORMAT}`;
             // If response is not JSON (e.g. 405 Method Not Allowed HTML page)
             errorMsg = await response.text();
           }
-          throw new Error(`OpenRouter Proxy error: ${response.status} - ${errorMsg}`);
+          throw new Error(`OpenRouter API error: ${response.status} - ${errorMsg}`);
         }
 
         const data = await response.json();
         const content = data.choices[0].message.content;
         return parseModelJson(content || '{}');
       } catch (error: any) {
-        Logger.warn(`Attempt ${attempt} failed with OpenRouter Proxy`, { component: 'GeminiService', model, attempt }, error);
+        Logger.warn(`Attempt ${attempt} failed with OpenRouter API`, { component: 'GeminiService', model, attempt }, error);
         lastError = error;
         
         if (error.message.includes('Failed to fetch') || attempt < retries) {
@@ -201,7 +201,7 @@ ${RESPONSE_FORMAT}`;
         throw error;
       }
     }
-    throw new Error(`OpenRouter Proxy failed after ${retries} attempts: ${lastError?.message}`);
+    throw new Error(`OpenRouter API failed after ${retries} attempts: ${lastError?.message}`);
   }
 
   private async callPhaseWithOllama(model: string, system: string, prompt: string): Promise<any> {
